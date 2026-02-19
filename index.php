@@ -1,3 +1,1 @@
-<?php
-echo "<h1>AI Form Theme Working 🔥</h1>";
-?>
+echo "<h1>AUTO DEPLOY SUCCESS 🚀</h1>";
