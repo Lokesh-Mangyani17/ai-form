@@ -1,4 +1,28 @@
-/*
-Theme Name: AI Form
-Version: 1.0
-*/
+body { font-family: Arial, sans-serif; background: #f2f4f7; margin: 0; }
+.container { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+.topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+.topbar a { margin-left: 12px; text-decoration:none; color:#0052cc; }
+.card { background:#fff; border-radius:10px; padding:18px; box-shadow:0 2px 8px rgba(0,0,0,.08); margin-bottom: 18px; }
+.grid { display:grid; gap:12px; }
+.grid.two { grid-template-columns: 1fr 1fr; }
+label { display:flex; flex-direction:column; gap:6px; font-weight:600; font-size:14px; }
+input, textarea, select, button { font: inherit; padding:10px; border:1px solid #ccd3dd; border-radius:6px; }
+textarea { min-height:88px; }
+button { cursor:pointer; background:#0052cc; color:white; border:none; }
+button.danger { background:#bd1f1f; }
+.steps { display:flex; gap:8px; margin-bottom:14px; }
+.steps span { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; background:#d1d9e6; }
+.steps span.active { background:#0052cc; color:#fff; }
+.step { display:none; }
+.step.active { display:block; }
+.nav-buttons { margin-top: 14px; display:flex; gap:8px; }
+.hidden { display:none !important; }
+#prevBtn { background:#6b7280; }
+#signaturePad { border:1px dashed #777; background:white; }
+.disclaimer { background:#f8fbff; border:1px solid #dae7ff; padding:8px 12px; margin-bottom:12px; }
+.alert { padding:10px; border-radius:8px; margin-bottom:12px; }
+.success { background:#e8f7ea; color:#166534; }
+.error { background:#fdeaea; color:#991b1b; }
+table { width:100%; border-collapse: collapse; }
+th, td { border-bottom:1px solid #e5e7eb; padding:8px; font-size:13px; text-align:left; }
+@media (max-width: 800px) { .grid.two { grid-template-columns: 1fr; } }
