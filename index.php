@@ -495,6 +495,7 @@ function emailPdfToDoctor(string $submissionId): array
 
       <section class="step" data-step="3">
         <div class="step-header"><h2>Step 3: Date, Signature & Submit</h2><p>Add declaration date and a mandatory digital signature to complete submission.</p></div>
+        <h2>Step 3: Date, Signature & Submit</h2>
         <label>Date
           <input type="date" name="application_date" value="<?= date('Y-m-d') ?>" required />
         </label>
