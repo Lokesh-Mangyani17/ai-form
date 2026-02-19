@@ -433,12 +433,13 @@ function emailPdfToDoctor(string $submissionId): array
     </section>
 
   <?php else: ?>
-    <form id="prescriptionForm" class="card" method="post" enctype="multipart/form-data" action="?page=form&action=save_submission">
+    <form id="prescriptionForm" class="card form-shell" method="post" enctype="multipart/form-data" action="?page=form&action=save_submission">
       <div class="steps"><span class="active">1</span><span>2</span><span>3</span></div>
+      <div class="step-labels"><span>Applicant Details</span><span>Clinical Details</span><span>Sign & Submit</span></div>
 
       <section class="step active" data-step="1">
-        <h2>Step 1: Disclaimer & Applicant Details</h2>
-        <div class="disclaimer">
+        <div class="step-header"><h2>Step 1: Disclaimer & Applicant Details</h2><p>Review the legal declaration and confirm your practitioner information.</p></div>
+                <div class="disclaimer">
           <p>1. This application is for prescribing/supplying/administering approved psychedelic-assisted treatment only.</p>
           <p>2. The applicant confirms all details provided are complete and accurate.</p>
           <p>3. Approval decisions are made by the relevant regulator and may require additional documents.</p>
@@ -465,7 +466,7 @@ function emailPdfToDoctor(string $submissionId): array
       </section>
 
       <section class="step" data-step="2">
-        <h2>Step 2: Product Details, Treatment Protocol & Peer Review</h2>
+        <div class="step-header"><h2>Step 2: Product Details, Treatment Protocol & Peer Review</h2><p>Select one or more products to auto-populate regulator-facing sections.</p></div>
         <label>Products (multi-select)
           <select id="products" name="products[]" multiple required>
             <?php foreach ($products as $p): ?>
@@ -493,15 +494,18 @@ function emailPdfToDoctor(string $submissionId): array
       </section>
 
       <section class="step" data-step="3">
+        <div class="step-header"><h2>Step 3: Date, Signature & Submit</h2><p>Add declaration date and a mandatory digital signature to complete submission.</p></div>
         <h2>Step 3: Date, Signature & Submit</h2>
         <label>Date
           <input type="date" name="application_date" value="<?= date('Y-m-d') ?>" required />
         </label>
 
-        <fieldset>
+        <fieldset class="signature-fieldset">
           <legend>Electronic Signature (required)</legend>
-          <label><input type="radio" name="signature_mode" value="draw" checked /> Draw signature</label>
-          <label><input type="radio" name="signature_mode" value="upload" /> Upload signature image</label>
+          <div class="signature-options">
+            <label><input type="radio" name="signature_mode" value="draw" checked /> Draw signature</label>
+            <label><input type="radio" name="signature_mode" value="upload" /> Upload signature image</label>
+          </div>
 
           <div id="drawWrap">
             <canvas id="signaturePad" width="500" height="160"></canvas>
