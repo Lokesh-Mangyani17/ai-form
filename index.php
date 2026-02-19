@@ -356,6 +356,7 @@ function emailPdfToDoctor(string $submissionId): array
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Prescription Form</title>
   <link rel="stylesheet" href="style.css" />
+  <style><?php echo file_exists(__DIR__ . '/style.css') ? file_get_contents(__DIR__ . '/style.css') : ''; ?></style>
 </head>
 <body>
 <div class="container">
@@ -465,7 +466,7 @@ function emailPdfToDoctor(string $submissionId): array
         </div>
       </section>
 
-      <section class="step" data-step="2">
+      <section class="step" data-step="2" style="display:none;">
         <div class="step-header"><h2>Step 2: Product Details, Treatment Protocol & Peer Review</h2><p>Select one or more products to auto-populate regulator-facing sections.</p></div>
         <label>Products (multi-select)
           <select id="products" name="products[]" multiple required>
@@ -493,9 +494,8 @@ function emailPdfToDoctor(string $submissionId): array
         </label>
       </section>
 
-      <section class="step" data-step="3">
+      <section class="step" data-step="3" style="display:none;">
         <div class="step-header"><h2>Step 3: Date, Signature & Submit</h2><p>Add declaration date and a mandatory digital signature to complete submission.</p></div>
-        <h2>Step 3: Date, Signature & Submit</h2>
         <label>Date
           <input type="date" name="application_date" value="<?= date('Y-m-d') ?>" required />
         </label>
@@ -536,7 +536,11 @@ const nextBtn = document.getElementById('nextBtn');
 const submitBtn = document.getElementById('submitBtn');
 
 function showStep(i) {
-  steps.forEach((s, n) => s.classList.toggle('active', n === i));
+  steps.forEach((s, n) => {
+    const active = n === i;
+    s.classList.toggle('active', active);
+    s.style.display = active ? 'block' : 'none';
+  });
   badges.forEach((b, n) => b.classList.toggle('active', n === i));
   prevBtn.style.visibility = i === 0 ? 'hidden' : 'visible';
   nextBtn.classList.toggle('hidden', i === steps.length - 1);
