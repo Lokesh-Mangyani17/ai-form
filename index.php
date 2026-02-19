@@ -7,30 +7,24 @@ define('PRODUCTS_FILE', DATA_DIR . '/products.json');
 define('DOCTOR_PREFS_FILE', DATA_DIR . '/doctor_prefs.json');
 
 bootstrapStorage();
-
-$mockDoctor = [
-    'id' => 1001,
-    'name' => 'Dr Jane Smith',
-    'email' => 'jane.smith@exampleclinic.nz',
-    'phone' => '+64 21 555 1234',
-    'cpn' => 'CPN-778899',
-];
+registerWordPressHooks();
 
 $page = $_GET['page'] ?? 'form';
 $action = $_GET['action'] ?? null;
 $message = null;
 $error = null;
+$doctor = getDoctorProfile();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'save_submission') {
-        [$ok, $message, $error] = saveSubmission($mockDoctor, $_POST, $_FILES);
+        [$ok, $message, $error] = saveSubmission($doctor, $_POST, $_FILES);
     }
 
-    if ($action === 'save_product' && isAdmin()) {
+    if ($action === 'save_product' && isAdmin() && !isWordPressRuntime()) {
         [$ok, $message, $error] = saveProduct($_POST);
     }
 
-    if ($action === 'delete_product' && isAdmin()) {
+    if ($action === 'delete_product' && isAdmin() && !isWordPressRuntime()) {
         [$ok, $message, $error] = deleteProduct($_POST['product_id'] ?? '');
     }
 
@@ -49,9 +43,117 @@ if ($action === 'download_support') {
     exit;
 }
 
-$doctorPrefs = getDoctorPrefs($mockDoctor['id']);
+$doctorPrefs = getDoctorPrefs((int)$doctor['id']);
 $products = getProducts();
 $submissions = getSubmissions();
+
+function isWordPressRuntime(): bool
+{
+    return function_exists('wp_get_current_user');
+}
+
+function registerWordPressHooks(): void
+{
+    if (!function_exists('add_action')) {
+        return;
+    }
+
+    add_action('show_user_profile', 'renderCpnUserField');
+    add_action('edit_user_profile', 'renderCpnUserField');
+    add_action('personal_options_update', 'saveCpnUserField');
+    add_action('edit_user_profile_update', 'saveCpnUserField');
+
+    add_action('woocommerce_product_options_general_product_data', 'renderPrescriptionProductFields');
+    add_action('woocommerce_process_product_meta', 'savePrescriptionProductFields');
+}
+
+function renderCpnUserField($user): void
+{
+    if (!function_exists('get_user_meta')) {
+        return;
+    }
+    $cpn = get_user_meta($user->ID, 'cpn', true);
+    echo '<h2>Prescription Form Fields</h2>';
+    echo '<table class="form-table"><tr>';
+    echo '<th><label for="cpn">CPN</label></th>';
+    echo '<td><input type="text" name="cpn" id="cpn" value="' . esc_attr($cpn) . '" class="regular-text" /></td>';
+    echo '</tr></table>';
+}
+
+function saveCpnUserField(int $userId): void
+{
+    if (!function_exists('current_user_can') || !current_user_can('edit_user', $userId)) {
+        return;
+    }
+    if (isset($_POST['cpn']) && function_exists('update_user_meta')) {
+        update_user_meta($userId, 'cpn', sanitize_text_field($_POST['cpn']));
+    }
+}
+
+function renderPrescriptionProductFields(): void
+{
+    if (!function_exists('woocommerce_wp_text_input') || !function_exists('woocommerce_wp_textarea_input')) {
+        return;
+    }
+
+    echo '<div class="options_group">';
+    woocommerce_wp_text_input(['id' => '_prescription_component', 'label' => 'Prescription Component']);
+    woocommerce_wp_text_input(['id' => '_prescription_strength', 'label' => 'Prescription Strength']);
+    woocommerce_wp_text_input(['id' => '_prescription_form', 'label' => 'Prescription Form']);
+    woocommerce_wp_text_input(['id' => '_prescription_source', 'label' => 'Sourced From']);
+    woocommerce_wp_text_input(['id' => '_prescription_indications', 'label' => 'Indications (comma separated)']);
+    woocommerce_wp_textarea_input([
+        'id' => '_prescription_indication_map',
+        'label' => 'Indication Mapping JSON',
+        'desc_tip' => true,
+        'description' => 'JSON by indication: {"Depression":{"supporting_evidence":"...","treatment_protocol":"...","scientific_peer_review":"..."}}',
+    ]);
+    echo '</div>';
+}
+
+function savePrescriptionProductFields(int $productId): void
+{
+    if (!function_exists('update_post_meta')) {
+        return;
+    }
+
+    $keys = [
+        '_prescription_component',
+        '_prescription_strength',
+        '_prescription_form',
+        '_prescription_source',
+        '_prescription_indications',
+        '_prescription_indication_map',
+    ];
+
+    foreach ($keys as $key) {
+        if (isset($_POST[$key])) {
+            update_post_meta($productId, $key, wp_kses_post(wp_unslash($_POST[$key])));
+        }
+    }
+}
+
+function getDoctorProfile(): array
+{
+    if (isWordPressRuntime() && function_exists('is_user_logged_in') && is_user_logged_in()) {
+        $user = wp_get_current_user();
+        return [
+            'id' => (int)$user->ID,
+            'name' => trim($user->display_name ?: $user->user_firstname . ' ' . $user->user_lastname),
+            'email' => (string)$user->user_email,
+            'phone' => (string)get_user_meta($user->ID, 'billing_phone', true),
+            'cpn' => (string)get_user_meta($user->ID, 'cpn', true),
+        ];
+    }
+
+    return [
+        'id' => 1001,
+        'name' => 'Dr Jane Smith',
+        'email' => 'jane.smith@exampleclinic.nz',
+        'phone' => '+64 21 555 1234',
+        'cpn' => 'CPN-778899',
+    ];
+}
 
 function bootstrapStorage(): void
 {
@@ -63,9 +165,7 @@ function bootstrapStorage(): void
     }
     if (!file_exists(PRODUCTS_FILE)) {
         $seed = [
-            ['id' => 'prd-001', 'name' => 'Psilocybin Oral Capsule', 'component' => 'Psilocybin', 'strength' => '25mg', 'form' => 'Capsule', 'source' => 'Medsafe-approved compounding supplier, NZ'],
-            ['id' => 'prd-002', 'name' => 'Ketamine Sublingual Troche', 'component' => 'Ketamine Hydrochloride', 'strength' => '100mg', 'form' => 'Troche', 'source' => 'Hospital pharmacy supply chain'],
-            ['id' => 'prd-003', 'name' => 'MDMA Assisted Therapy Dose', 'component' => 'MDMA', 'strength' => '80mg', 'form' => 'Oral tablet', 'source' => 'Named-patient import license'],
+            ['id' => 'prd-001', 'name' => 'Psilocybin Oral Capsule', 'component' => 'Psilocybin', 'strength' => '25mg', 'form' => 'Capsule', 'source' => 'Medsafe-approved compounding supplier, NZ', 'indications' => ['Depression'], 'indication_map' => ['Depression' => ['supporting_evidence' => 'Default supporting evidence', 'treatment_protocol' => 'Default treatment protocol', 'scientific_peer_review' => 'Default peer review']]],
         ];
         file_put_contents(PRODUCTS_FILE, json_encode($seed, JSON_PRETTY_PRINT));
     }
@@ -81,6 +181,34 @@ function isAdmin(): bool
 
 function getProducts(): array
 {
+    if (isWordPressRuntime() && function_exists('wc_get_products')) {
+        $wcProducts = wc_get_products(['status' => 'publish', 'limit' => -1]);
+        $mapped = [];
+        foreach ($wcProducts as $product) {
+            $pid = $product->get_id();
+            $indicationMapRaw = (string)get_post_meta($pid, '_prescription_indication_map', true);
+            $indicationMap = json_decode($indicationMapRaw, true);
+            if (!is_array($indicationMap)) {
+                $indicationMap = [];
+            }
+
+            $indicationsRaw = (string)get_post_meta($pid, '_prescription_indications', true);
+            $indications = array_values(array_filter(array_map('trim', explode(',', $indicationsRaw))));
+
+            $mapped[] = [
+                'id' => (string)$pid,
+                'name' => $product->get_name(),
+                'component' => (string)get_post_meta($pid, '_prescription_component', true),
+                'strength' => (string)get_post_meta($pid, '_prescription_strength', true),
+                'form' => (string)get_post_meta($pid, '_prescription_form', true),
+                'source' => (string)get_post_meta($pid, '_prescription_source', true),
+                'indications' => $indications,
+                'indication_map' => $indicationMap,
+            ];
+        }
+        return $mapped;
+    }
+
     return json_decode(file_get_contents(PRODUCTS_FILE), true) ?: [];
 }
 
@@ -99,6 +227,8 @@ function saveProduct(array $data): array
         'strength' => trim($data['strength'] ?? ''),
         'form' => trim($data['form'] ?? ''),
         'source' => trim($data['source'] ?? ''),
+        'indications' => array_values(array_filter(array_map('trim', explode(',', (string)($data['indications'] ?? ''))))),
+        'indication_map' => [],
     ];
     file_put_contents(PRODUCTS_FILE, json_encode($products, JSON_PRETTY_PRINT));
     return [true, 'Product added successfully.', null];
@@ -143,9 +273,26 @@ function getSubmissions(): array
     return $records;
 }
 
+function buildSelectedProductDetails(array $selectedProductIds): array
+{
+    $catalog = getProducts();
+    $lookup = [];
+    foreach ($catalog as $p) {
+        $lookup[(string)$p['id']] = $p;
+    }
+
+    $selected = [];
+    foreach ($selectedProductIds as $pid) {
+        if (isset($lookup[(string)$pid])) {
+            $selected[] = $lookup[(string)$pid];
+        }
+    }
+    return $selected;
+}
+
 function saveSubmission(array $doctor, array $post, array $files): array
 {
-    $selectedProducts = $post['products'] ?? [];
+    $selectedProducts = array_values(array_filter($post['products'] ?? []));
     if (empty($selectedProducts)) {
         return [false, null, 'Please select at least one product.'];
     }
@@ -168,7 +315,19 @@ function saveSubmission(array $doctor, array $post, array $files): array
         return [false, null, 'Please upload a signature image.'];
     }
 
+    $indication = trim($post['indication'] ?? '');
+    $indicationOther = trim($post['indication_other'] ?? '');
+    if ($indication === '') {
+        return [false, null, 'Please select an indication.'];
+    }
+    if ($indication === 'Other' && $indicationOther === '') {
+        return [false, null, 'Please enter a custom indication.'];
+    }
+
     saveDoctorPrefs((int)$doctor['id'], $post);
+
+    $selectedDetails = buildSelectedProductDetails($selectedProducts);
+    $productNames = array_map(fn($p) => $p['name'], $selectedDetails);
 
     $id = 'sub-' . date('YmdHis') . '-' . substr(md5(uniqid('', true)), 0, 6);
     $submission = [
@@ -179,9 +338,13 @@ function saveSubmission(array $doctor, array $post, array $files): array
             'vocational_scope' => trim($post['vocational_scope'] ?? ''),
             'clinical_experience' => trim($post['clinical_experience'] ?? ''),
             'products' => $selectedProducts,
+            'product_names' => $productNames,
+            'indication' => $indication,
+            'indication_other' => $indicationOther,
             'sourcing_notes' => trim($post['sourcing_notes'] ?? ''),
-            'protocol_notes' => trim($post['protocol_notes'] ?? ''),
-            'peer_review_notes' => trim($post['peer_review_notes'] ?? ''),
+            'supporting_evidence_notes' => trim($post['supporting_evidence_notes'] ?? ''),
+            'treatment_protocol_notes' => trim($post['treatment_protocol_notes'] ?? ''),
+            'scientific_peer_review_notes' => trim($post['scientific_peer_review_notes'] ?? ''),
             'date' => trim($post['application_date'] ?? date('Y-m-d')),
             'signature_mode' => $signatureMode,
             'signature_drawn' => $signatureDrawn,
@@ -221,13 +384,13 @@ function createTextPdf(array $submission, string $path): void
     $lines[] = 'Vocational Scope: ' . $submission['form']['vocational_scope'];
     $lines[] = 'Clinical Experience & Training: ' . $submission['form']['clinical_experience'];
     $lines[] = '';
-    $lines[] = 'Products: ' . implode(', ', $submission['form']['products']);
+    $lines[] = 'Products: ' . implode(', ', $submission['form']['product_names'] ?? []);
+    $lines[] = 'Indication: ' . $submission['form']['indication'] . ' ' . $submission['form']['indication_other'];
     $lines[] = 'Sourcing Notes: ' . $submission['form']['sourcing_notes'];
-    $lines[] = 'Treatment Protocol Notes: ' . $submission['form']['protocol_notes'];
-    $lines[] = 'Peer Review Notes: ' . $submission['form']['peer_review_notes'];
+    $lines[] = 'Supporting Evidence Notes: ' . $submission['form']['supporting_evidence_notes'];
+    $lines[] = 'Treatment Protocol Notes: ' . $submission['form']['treatment_protocol_notes'];
+    $lines[] = 'Scientific Peer Review Notes: ' . $submission['form']['scientific_peer_review_notes'];
     $lines[] = 'Application Date: ' . $submission['form']['date'];
-    $lines[] = 'Signature Mode: ' . $submission['form']['signature_mode'];
-    $lines[] = 'Signature Stored: ' . ($submission['form']['signature_mode'] === 'draw' ? 'Drawn signature captured' : ($submission['form']['signature_upload'] ?? 'No'));
 
     $y = 760;
     $stream = "BT\n/F1 10 Tf\n";
@@ -372,38 +535,26 @@ function emailPdfToDoctor(string $submissionId): array
   <?php if ($error): ?><div class="alert error"><?= htmlspecialchars($error) ?></div><?php endif; ?>
 
   <?php if ($page === 'admin'): ?>
-    <section class="card">
-      <h2>Product Management</h2>
-      <form method="post" action="?page=admin&action=save_product" class="grid">
-        <input name="name" placeholder="Product Name" required />
-        <input name="component" placeholder="Component" required />
-        <input name="strength" placeholder="Strength" required />
-        <input name="form" placeholder="Form" required />
-        <input name="source" placeholder="Source" required />
-        <button type="submit">Add Product</button>
-      </form>
-
-      <table>
-        <thead><tr><th>Name</th><th>Component</th><th>Strength</th><th>Form</th><th>Source</th><th></th></tr></thead>
-        <tbody>
-        <?php foreach ($products as $p): ?>
-          <tr>
-            <td><?= htmlspecialchars($p['name']) ?></td>
-            <td><?= htmlspecialchars($p['component']) ?></td>
-            <td><?= htmlspecialchars($p['strength']) ?></td>
-            <td><?= htmlspecialchars($p['form']) ?></td>
-            <td><?= htmlspecialchars($p['source']) ?></td>
-            <td>
-              <form method="post" action="?page=admin&action=delete_product">
-                <input type="hidden" name="product_id" value="<?= htmlspecialchars($p['id']) ?>" />
-                <button class="danger" type="submit">Delete</button>
-              </form>
-            </td>
-          </tr>
-        <?php endforeach; ?>
-        </tbody>
-      </table>
-    </section>
+    <?php if (isWordPressRuntime()): ?>
+      <section class="card">
+        <h2>WooCommerce Configuration</h2>
+        <p>Products are loaded from WooCommerce. Edit each product under <strong>WooCommerce → Products</strong> and fill prescription custom fields (component, strength, form, sourced from, indications, indication mapping JSON).</p>
+        <p>Doctor CPN is managed under <strong>Users → Profile</strong> via the new CPN field.</p>
+      </section>
+    <?php else: ?>
+      <section class="card">
+        <h2>Product Management</h2>
+        <form method="post" action="?page=admin&action=save_product" class="grid">
+          <input name="name" placeholder="Product Name" required />
+          <input name="component" placeholder="Component" required />
+          <input name="strength" placeholder="Strength" required />
+          <input name="form" placeholder="Form" required />
+          <input name="source" placeholder="Source" required />
+          <input name="indications" placeholder="Indications (comma separated)" />
+          <button type="submit">Add Product</button>
+        </form>
+      </section>
+    <?php endif; ?>
 
     <section class="card">
       <h2>Submitted PDFs</h2>
@@ -439,8 +590,8 @@ function emailPdfToDoctor(string $submissionId): array
       <div class="step-labels"><span>Applicant Details</span><span>Clinical Details</span><span>Sign & Submit</span></div>
 
       <section class="step active" data-step="1">
-        <div class="step-header"><h2>Step 1: Disclaimer & Applicant Details</h2><p>Review the legal declaration and confirm your practitioner information.</p></div>
-                <div class="disclaimer">
+        <div class="step-header"><h2>Step 1: Disclaimer & Applicant Details</h2><p>Review declaration and confirm your practitioner profile data.</p></div>
+        <div class="disclaimer">
           <p>1. This application is for prescribing/supplying/administering approved psychedelic-assisted treatment only.</p>
           <p>2. The applicant confirms all details provided are complete and accurate.</p>
           <p>3. Approval decisions are made by the relevant regulator and may require additional documents.</p>
@@ -453,10 +604,10 @@ function emailPdfToDoctor(string $submissionId): array
           <p>10. Electronic signature carries the same intent as a handwritten declaration.</p>
         </div>
         <div class="grid two">
-          <label>Name<input value="<?= htmlspecialchars($mockDoctor['name']) ?>" readonly /></label>
-          <label>Email<input value="<?= htmlspecialchars($mockDoctor['email']) ?>" readonly /></label>
-          <label>Phone<input value="<?= htmlspecialchars($mockDoctor['phone']) ?>" readonly /></label>
-          <label>CPN<input value="<?= htmlspecialchars($mockDoctor['cpn']) ?>" readonly /></label>
+          <label>Name<input value="<?= htmlspecialchars($doctor['name']) ?>" readonly /></label>
+          <label>Email<input value="<?= htmlspecialchars($doctor['email']) ?>" readonly /></label>
+          <label>Phone<input value="<?= htmlspecialchars($doctor['phone']) ?>" readonly /></label>
+          <label>CPN<input value="<?= htmlspecialchars($doctor['cpn']) ?>" readonly /></label>
           <label>1.8 Vocational Scope
             <textarea name="vocational_scope" required><?= htmlspecialchars($doctorPrefs['vocational_scope']) ?></textarea>
           </label>
@@ -467,35 +618,74 @@ function emailPdfToDoctor(string $submissionId): array
       </section>
 
       <section class="step" data-step="2" style="display:none;">
-        <div class="step-header"><h2>Step 2: Product Details, Treatment Protocol & Peer Review</h2><p>Select one or more products to auto-populate regulator-facing sections.</p></div>
-        <label>Products (multi-select)
+        <div class="step-header"><h2>Step 2: Product Details & Indication Mapping</h2><p>Select products and indication to auto-populate supporting sections.</p></div>
+
+        <label>Products (dropdown multi-select)
           <select id="products" name="products[]" multiple required>
             <?php foreach ($products as $p): ?>
-              <option value="<?= htmlspecialchars($p['name']) ?>" data-source="<?= htmlspecialchars($p['source']) ?>" data-protocol="<?= htmlspecialchars($p['component'] . ' ' . $p['strength'] . ' via ' . $p['form']) ?>" data-peer="<?= htmlspecialchars('Peer-reviewed evidence for ' . $p['component']) ?>">
-                <?= htmlspecialchars($p['name'] . ' — ' . $p['component'] . ' / ' . $p['strength'] . ' / ' . $p['form']) ?>
+              <option
+                value="<?= htmlspecialchars((string)$p['id']) ?>"
+                data-name="<?= htmlspecialchars($p['name']) ?>"
+                data-component="<?= htmlspecialchars($p['component']) ?>"
+                data-strength="<?= htmlspecialchars($p['strength']) ?>"
+                data-form="<?= htmlspecialchars($p['form']) ?>"
+                data-source="<?= htmlspecialchars($p['source']) ?>"
+                data-indications='<?= htmlspecialchars(json_encode($p['indications'] ?? []), ENT_QUOTES) ?>'
+                data-indication-map='<?= htmlspecialchars(json_encode($p['indication_map'] ?? []), ENT_QUOTES) ?>'
+              >
+                <?= htmlspecialchars($p['name']) ?>
               </option>
             <?php endforeach; ?>
           </select>
         </label>
-        <label>2.2 Sourcing Details (auto + notes)
-          <textarea id="sourcingAuto" readonly></textarea>
-          <textarea name="sourcing_notes" placeholder="Add or amend sourcing notes (does not overwrite source data)"></textarea>
+
+        <div class="grid two">
+          <label>Component (auto)
+            <textarea id="componentAuto" readonly></textarea>
+          </label>
+          <label>Strength (auto)
+            <textarea id="strengthAuto" readonly></textarea>
+          </label>
+          <label>Form (auto)
+            <textarea id="formAuto" readonly></textarea>
+          </label>
+          <label>Sourced from (auto)
+            <textarea id="sourcingAuto" readonly></textarea>
+            <textarea name="sourcing_notes" placeholder="Add/amend sourcing notes"></textarea>
+          </label>
+        </div>
+
+        <label>Indication (auto from selected products)
+          <select id="indicationSelect" name="indication" required>
+            <option value="">Select indication</option>
+          </select>
         </label>
-        <label>3.1 – 3.4 Treatment Protocol (auto + notes)
-          <textarea id="protocolAuto" readonly></textarea>
-          <textarea name="protocol_notes" placeholder="Protocol notes"></textarea>
+        <label id="indicationOtherWrap" class="hidden">Other indication
+          <input type="text" name="indication_other" id="indicationOtherInput" placeholder="Enter custom indication" />
         </label>
-        <label>4.1 Scientific Peer Review (auto + notes)
-          <textarea id="peerAuto" readonly></textarea>
-          <textarea name="peer_review_notes" placeholder="Peer review notes"></textarea>
+
+        <label>Supporting Evidence (auto by indication)
+          <textarea id="supportingEvidenceAuto" readonly></textarea>
+          <textarea name="supporting_evidence_notes" placeholder="Add/amend supporting evidence notes"></textarea>
         </label>
+
+        <label>Treatment Protocol (auto by indication)
+          <textarea id="treatmentProtocolAuto" readonly></textarea>
+          <textarea name="treatment_protocol_notes" placeholder="Add/amend treatment protocol notes"></textarea>
+        </label>
+
+        <label>Scientific Peer Review (auto by indication)
+          <textarea id="peerReviewAuto" readonly></textarea>
+          <textarea name="scientific_peer_review_notes" placeholder="Add/amend scientific peer review notes"></textarea>
+        </label>
+
         <label>Upload peer review support document
           <input type="file" name="peer_support_doc" />
         </label>
       </section>
 
       <section class="step" data-step="3" style="display:none;">
-        <div class="step-header"><h2>Step 3: Date, Signature & Submit</h2><p>Add declaration date and a mandatory digital signature to complete submission.</p></div>
+        <div class="step-header"><h2>Step 3: Date, Signature & Submit</h2><p>Add date and a mandatory digital signature.</p></div>
         <label>Date
           <input type="date" name="application_date" value="<?= date('Y-m-d') ?>" required />
         </label>
@@ -552,14 +742,85 @@ if (prevBtn) prevBtn.onclick = () => { if (idx > 0) { idx--; showStep(idx); } };
 if (steps.length) showStep(0);
 
 const productSelect = document.getElementById('products');
+const indicationSelect = document.getElementById('indicationSelect');
+const indicationOtherWrap = document.getElementById('indicationOtherWrap');
+
+const decodeJsonData = (value, fallback = []) => {
+  try { return JSON.parse(value || '[]'); } catch (e) { return fallback; }
+};
+
+function syncProductAuto() {
+  if (!productSelect) return;
+  const selected = [...productSelect.selectedOptions];
+
+  const components = selected.map(o => `• ${o.dataset.name}: ${o.dataset.component || '-'}`).join('\n');
+  const strengths = selected.map(o => `• ${o.dataset.name}: ${o.dataset.strength || '-'}`).join('\n');
+  const forms = selected.map(o => `• ${o.dataset.name}: ${o.dataset.form || '-'}`).join('\n');
+  const sources = selected.map(o => `• ${o.dataset.name}: ${o.dataset.source || '-'}`).join('\n');
+
+  document.getElementById('componentAuto').value = components;
+  document.getElementById('strengthAuto').value = strengths;
+  document.getElementById('formAuto').value = forms;
+  document.getElementById('sourcingAuto').value = sources;
+
+  const indicationSet = new Set();
+  selected.forEach(o => decodeJsonData(o.dataset.indications, []).forEach(i => indicationSet.add(i)));
+
+  if (indicationSelect) {
+    const current = indicationSelect.value;
+    indicationSelect.innerHTML = '<option value="">Select indication</option>';
+    [...indicationSet].forEach(ind => {
+      const opt = document.createElement('option');
+      opt.value = ind;
+      opt.textContent = ind;
+      indicationSelect.appendChild(opt);
+    });
+    const otherOpt = document.createElement('option');
+    otherOpt.value = 'Other';
+    otherOpt.textContent = 'Other';
+    indicationSelect.appendChild(otherOpt);
+    if ([...indicationSelect.options].some(o => o.value === current)) indicationSelect.value = current;
+  }
+
+  syncIndicationAuto();
+}
+
+function syncIndicationAuto() {
+  if (!productSelect || !indicationSelect) return;
+  const selected = [...productSelect.selectedOptions];
+  const indication = indicationSelect.value;
+
+  const supporting = [];
+  const protocol = [];
+  const peerReview = [];
+
+  selected.forEach(o => {
+    const map = decodeJsonData(o.dataset.indicationMap, {});
+    const row = map[indication] || null;
+    if (!row) return;
+    supporting.push(`• ${o.dataset.name}: ${row.supporting_evidence || '-'}`);
+    protocol.push(`• ${o.dataset.name}: ${row.treatment_protocol || '-'}`);
+    peerReview.push(`• ${o.dataset.name}: ${row.scientific_peer_review || '-'}`);
+  });
+
+  document.getElementById('supportingEvidenceAuto').value = supporting.join('\n');
+  document.getElementById('treatmentProtocolAuto').value = protocol.join('\n');
+  document.getElementById('peerReviewAuto').value = peerReview.join('\n');
+
+  if (indication === 'Other') {
+    indicationOtherWrap.classList.remove('hidden');
+  } else {
+    indicationOtherWrap.classList.add('hidden');
+    document.getElementById('indicationOtherInput').value = '';
+  }
+}
+
 if (productSelect) {
-  const syncAutoText = () => {
-    const selected = [...productSelect.selectedOptions];
-    document.getElementById('sourcingAuto').value = selected.map(o => `• ${o.value}: ${o.dataset.source}`).join('\n');
-    document.getElementById('protocolAuto').value = selected.map(o => `• ${o.value}: ${o.dataset.protocol}`).join('\n');
-    document.getElementById('peerAuto').value = selected.map(o => `• ${o.value}: ${o.dataset.peer}`).join('\n');
-  };
-  productSelect.addEventListener('change', syncAutoText);
+  productSelect.addEventListener('change', syncProductAuto);
+  syncProductAuto();
+}
+if (indicationSelect) {
+  indicationSelect.addEventListener('change', syncIndicationAuto);
 }
 
 const drawWrap = document.getElementById('drawWrap');
