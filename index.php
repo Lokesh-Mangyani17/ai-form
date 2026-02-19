@@ -620,24 +620,30 @@ function emailPdfToDoctor(string $submissionId): array
       <section class="step" data-step="2" style="display:none;">
         <div class="step-header"><h2>Step 2: Product Details & Indication Mapping</h2><p>Select products and indication to auto-populate supporting sections.</p></div>
 
-        <label>Products (dropdown multi-select)
-          <select id="products" name="products[]" multiple required>
+        <fieldset class="product-picker">
+          <legend>Products (multi-select)</legend>
+          <p class="hint">Tick one or more products. No Ctrl/Cmd key needed.</p>
+          <div id="products" class="product-list" role="group" aria-label="Products">
             <?php foreach ($products as $p): ?>
-              <option
-                value="<?= htmlspecialchars((string)$p['id']) ?>"
-                data-name="<?= htmlspecialchars($p['name']) ?>"
-                data-component="<?= htmlspecialchars($p['component']) ?>"
-                data-strength="<?= htmlspecialchars($p['strength']) ?>"
-                data-form="<?= htmlspecialchars($p['form']) ?>"
-                data-source="<?= htmlspecialchars($p['source']) ?>"
-                data-indications='<?= htmlspecialchars(json_encode($p['indications'] ?? []), ENT_QUOTES) ?>'
-                data-indication-map='<?= htmlspecialchars(json_encode($p['indication_map'] ?? []), ENT_QUOTES) ?>'
-              >
-                <?= htmlspecialchars($p['name']) ?>
-              </option>
+              <label class="product-item">
+                <input
+                  class="product-check"
+                  type="checkbox"
+                  name="products[]"
+                  value="<?= htmlspecialchars((string)$p['id']) ?>"
+                  data-name="<?= htmlspecialchars($p['name']) ?>"
+                  data-component="<?= htmlspecialchars($p['component']) ?>"
+                  data-strength="<?= htmlspecialchars($p['strength']) ?>"
+                  data-form="<?= htmlspecialchars($p['form']) ?>"
+                  data-source="<?= htmlspecialchars($p['source']) ?>"
+                  data-indications='<?= htmlspecialchars(json_encode($p['indications'] ?? []), ENT_QUOTES) ?>'
+                  data-indication-map='<?= htmlspecialchars(json_encode($p['indication_map'] ?? []), ENT_QUOTES) ?>'
+                />
+                <span><?= htmlspecialchars($p['name']) ?></span>
+              </label>
             <?php endforeach; ?>
-          </select>
-        </label>
+          </div>
+        </fieldset>
 
         <div class="grid two">
           <label>Component (auto)
@@ -741,7 +747,7 @@ if (nextBtn) nextBtn.onclick = () => { if (idx < steps.length - 1) { idx++; show
 if (prevBtn) prevBtn.onclick = () => { if (idx > 0) { idx--; showStep(idx); } };
 if (steps.length) showStep(0);
 
-const productSelect = document.getElementById('products');
+const productWrap = document.getElementById('products');
 const indicationSelect = document.getElementById('indicationSelect');
 const indicationOtherWrap = document.getElementById('indicationOtherWrap');
 
@@ -750,8 +756,8 @@ const decodeJsonData = (value, fallback = []) => {
 };
 
 function syncProductAuto() {
-  if (!productSelect) return;
-  const selected = [...productSelect.selectedOptions];
+  if (!productWrap) return;
+  const selected = [...document.querySelectorAll('.product-check:checked')];
 
   const components = selected.map(o => `• ${o.dataset.name}: ${o.dataset.component || '-'}`).join('\n');
   const strengths = selected.map(o => `• ${o.dataset.name}: ${o.dataset.strength || '-'}`).join('\n');
@@ -786,8 +792,8 @@ function syncProductAuto() {
 }
 
 function syncIndicationAuto() {
-  if (!productSelect || !indicationSelect) return;
-  const selected = [...productSelect.selectedOptions];
+  if (!productWrap || !indicationSelect) return;
+  const selected = [...document.querySelectorAll('.product-check:checked')];
   const indication = indicationSelect.value;
 
   const supporting = [];
@@ -815,8 +821,8 @@ function syncIndicationAuto() {
   }
 }
 
-if (productSelect) {
-  productSelect.addEventListener('change', syncProductAuto);
+if (productWrap) {
+  productWrap.addEventListener('change', syncProductAuto);
   syncProductAuto();
 }
 if (indicationSelect) {

@@ -180,3 +180,25 @@ tbody td { border-bottom: 1px solid #e2e8f0; padding: 10px; vertical-align: top;
   .topbar { flex-direction: column; align-items: flex-start; gap: 10px; }
   .step-labels { font-size: 11px; }
 }
+
+
+.product-picker {
+  border: 1px solid #d7e2f2;
+  border-radius: 12px;
+  padding: 12px;
+  background: #f9fbff;
+}
+.product-picker legend { font-weight: 700; padding: 0 6px; }
+.hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.product-list { display: grid; gap: 8px; max-height: 220px; overflow: auto; }
+.product-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d9e3f2;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fff;
+}
+.product-item input { margin: 0; }
