@@ -580,6 +580,9 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $fieldY -= 16;
     $expText = (string)($form['clinical_experience'] ?? '');
     $expLines = pdfWordWrap($expText, 80);
+    if (empty($expLines)) {
+        $expLines = ['N/A'];
+    }
     foreach ($expLines as $line) {
         $p1[] = pdfTextCommand($line, $margin + 4, $fieldY, 9);
         $fieldY -= 14;
@@ -785,7 +788,12 @@ function buildSubmissionProductRows(array $submission): array
     return $rows;
 }
 
-function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3, string $signatureDrawn = '', float $sigBoxY = 548): bool
+/** @var float Default Y position for signature box on page 3. */
+const PDF_DEFAULT_SIGNATURE_Y = 548;
+/** @var float Horizontal offset from label to value in label-value pairs. */
+const PDF_LABEL_VALUE_OFFSET = 140;
+
+function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y): bool
 {
     $fontRes = '<< /F1 6 0 R /F2 10 0 R >>';
     $objects = [];
@@ -940,7 +948,7 @@ function pdfLabelValue(string $label, string $value, float $x, float $y): string
     $commands[] = pdfFillColor(0.3, 0.3, 0.3);
     $commands[] = pdfBoldTextCommand($label . ':', $x, $y, 9);
     $commands[] = pdfFillColor(0, 0, 0);
-    $commands[] = pdfTextCommand($value, $x + 140, $y, 9);
+    $commands[] = pdfTextCommand($value, $x + PDF_LABEL_VALUE_OFFSET, $y, 9);
     return implode("\n", $commands);
 }
 
@@ -961,7 +969,7 @@ function pdfWordWrap(string $text, int $maxChars): array
 {
     $text = trim($text);
     if ($text === '') {
-        return ['N/A'];
+        return [];
     }
     $words = explode(' ', $text);
     $lines = [];
@@ -969,7 +977,7 @@ function pdfWordWrap(string $text, int $maxChars): array
     foreach ($words as $word) {
         if ($current === '') {
             $current = $word;
-        } elseif (strlen($current) + 1 + strlen($word) <= $maxChars) {
+        } elseif (mb_strlen($current, 'UTF-8') + 1 + mb_strlen($word, 'UTF-8') <= $maxChars) {
             $current .= ' ' . $word;
         } else {
             $lines[] = $current;
