@@ -53,7 +53,6 @@ if ($action === 'download_support') {
 $doctorPrefs = getDoctorPrefs((int)$doctor['id']);
 $products = getProducts();
 $submissions = getSubmissions();
-$templateAvailable = file_exists(PDF_TEMPLATE_FILE);
 $submissionView = null;
 if (($page === 'form') && ($_GET['submitted'] ?? '') === '1') {
     $submissionView = findSubmission($_GET['id'] ?? '');
@@ -400,7 +399,10 @@ function saveSubmission(array $doctor, array $post, array $files): array
     }
 
     $pdfPath = SUBMISSIONS_DIR . '/' . $id . '.pdf';
-    createRegulatorPdf($submission, $pdfPath);
+    [$pdfOk, $pdfError] = createRegulatorPdf($submission, $pdfPath);
+    if (!$pdfOk) {
+        return [false, null, $pdfError, null];
+    }
     $submission['pdf_file'] = basename($pdfPath);
 
     file_put_contents(SUBMISSIONS_DIR . '/' . $id . '.json', json_encode($submission, JSON_PRETTY_PRINT));
@@ -408,67 +410,18 @@ function saveSubmission(array $doctor, array $post, array $files): array
     return [true, 'Submission saved and PDF generated successfully.', null, $id];
 }
 
-function createRegulatorPdf(array $submission, string $path): void
+function createRegulatorPdf(array $submission, string $path): array
 {
-    if (file_exists(PDF_TEMPLATE_FILE)) {
-        $ok = fillTemplatePdfFields(PDF_TEMPLATE_FILE, $path, buildPdfFieldValueMap($submission));
-        if ($ok) {
-            return;
-        }
+    if (!file_exists(PDF_TEMPLATE_FILE)) {
+        return [false, 'Medsafe PDF template file is missing. Please upload ApprovalToPrescribePsychedelics.pdf into data/.'];
     }
 
-    $lines = [];
-    $lines[] = 'Approval to Prescribe/Supply/Administer - Application';
-    $lines[] = 'Submission ID: ' . $submission['id'];
-    $lines[] = 'Submitted: ' . $submission['submitted_at'];
-    $lines[] = '';
-    $lines[] = 'Applicant Details';
-    $lines[] = 'Name: ' . $submission['doctor']['name'];
-    $lines[] = 'Email: ' . $submission['doctor']['email'];
-    $lines[] = 'Phone: ' . $submission['doctor']['phone'];
-    $lines[] = 'CPN: ' . $submission['doctor']['cpn'];
-    $lines[] = 'Vocational Scope: ' . $submission['form']['vocational_scope'];
-    $lines[] = 'Clinical Experience & Training: ' . $submission['form']['clinical_experience'];
-    $lines[] = '';
-    $lines[] = 'Products: ' . implode(', ', $submission['form']['product_names'] ?? []);
-    $lines[] = 'Indication: ' . $submission['form']['indication'] . ' ' . $submission['form']['indication_other'];
-    $lines[] = 'Sourcing Notes: ' . $submission['form']['sourcing_notes'];
-    $lines[] = 'Supporting Evidence Notes: ' . $submission['form']['supporting_evidence_notes'];
-    $lines[] = 'Treatment Protocol Notes: ' . $submission['form']['treatment_protocol_notes'];
-    $lines[] = 'Scientific Peer Review Notes: ' . $submission['form']['scientific_peer_review_notes'];
-    $lines[] = 'Application Date: ' . $submission['form']['date'];
-
-    $y = 760;
-    $stream = "BT\n/F1 10 Tf\n";
-    foreach ($lines as $line) {
-        $safe = str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $line);
-        $stream .= sprintf("1 0 0 1 40 %d Tm (%s) Tj\n", $y, $safe);
-        $y -= 14;
-    }
-    $stream .= "ET";
-
-    $objects = [];
-    $objects[] = "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n";
-    $objects[] = "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n";
-    $objects[] = "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n";
-    $objects[] = "4 0 obj << /Length " . strlen($stream) . " >> stream\n$stream\nendstream endobj\n";
-    $objects[] = "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n";
-
-    $pdf = "%PDF-1.4\n";
-    $offsets = [0];
-    foreach ($objects as $obj) {
-        $offsets[] = strlen($pdf);
-        $pdf .= $obj;
+    $ok = fillTemplatePdfFields(PDF_TEMPLATE_FILE, $path, buildPdfFieldValueMap($submission));
+    if ($ok) {
+        return [true, null];
     }
 
-    $xrefPos = strlen($pdf);
-    $pdf .= "xref\n0 6\n0000000000 65535 f \n";
-    for ($i = 1; $i <= 5; $i++) {
-        $pdf .= sprintf("%010d 00000 n \n", $offsets[$i]);
-    }
-    $pdf .= "trailer << /Size 6 /Root 1 0 R >>\nstartxref\n$xrefPos\n%%EOF";
-
-    file_put_contents($path, $pdf);
+    return [false, 'Unable to write form fields into the Medsafe PDF template.'];
 }
 
 function buildPdfFieldValueMap(array $submission): array
@@ -747,7 +700,6 @@ function emailPdfToDoctor(string $submissionId): array
   <?php endif; ?>
   <?php if ($message): ?><div class="alert success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
   <?php if ($error): ?><div class="alert error"><?= htmlspecialchars($error) ?></div><?php endif; ?>
-  <?php if (!$templateAvailable): ?><div class="alert error">Exact Medsafe PDF template is unavailable in this environment. Upload/copy <code>ApprovalToPrescribePsychedelics.pdf</code> into <code>data/</code> to get an exact 100% match.</div><?php endif; ?>
 
   <?php if ($page === 'admin'): ?>
     <?php if (isWordPressRuntime()): ?>
@@ -803,7 +755,7 @@ function emailPdfToDoctor(string $submissionId): array
     <?php if ($submissionView): ?>
       <section class="card thank-you">
         <h2>Thank you! Your application has been submitted.</h2>
-        <p>Your PDF has been generated<?= $templateAvailable ? ' in the exact Medsafe format' : ' using fallback format because template was unavailable' ?> and is ready for download.</p>
+        <p>Your PDF has been generated in the exact Medsafe format and is ready for download.</p>
         <div class="thank-actions">
           <a class="btn-link" href="?action=download_pdf&id=<?= urlencode($submissionView['id']) ?>">Download PDF</a>
           <a class="btn-link ghost" href="?page=form">Create another submission</a>
