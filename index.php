@@ -13,6 +13,12 @@ define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
 const PDF_DEFAULT_SIGNATURE_Y = 548;
 /** @var float Horizontal offset from label to value in label-value pairs. */
 const PDF_LABEL_VALUE_OFFSET = 140;
+/** @var float Medsafe teal red component (#00594C). */
+const MEDSAFE_TEAL_R = 0.000;
+/** @var float Medsafe teal green component (#00594C). */
+const MEDSAFE_TEAL_G = 0.349;
+/** @var float Medsafe teal blue component (#00594C). */
+const MEDSAFE_TEAL_B = 0.298;
 
 bootstrapStorage();
 registerWordPressHooks();
@@ -546,21 +552,39 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $pageW = 595;
     $contentW = $pageW - $margin * 2;
 
+    // Medsafe teal: #00594C – see MEDSAFE_TEAL_* constants.
+    $tealR = MEDSAFE_TEAL_R;
+    $tealG = MEDSAFE_TEAL_G;
+    $tealB = MEDSAFE_TEAL_B;
+
     // -- Page 1: Title + Applicant Details --
     $p1 = [];
-    $p1[] = pdfFillColor(0.16, 0.24, 0.44);
-    $p1[] = pdfFilledRect(0, 792, $pageW, 50);
+    // Top teal banner
+    $p1[] = pdfFillColor($tealR, $tealG, $tealB);
+    $p1[] = pdfFilledRect(0, 792, $pageW, 70);
+    // White branding text
     $p1[] = pdfFillColor(1, 1, 1);
-    $p1[] = pdfBoldTextCommand('PRESCRIPTION APPLICATION', $margin, 810, 16);
-    $p1[] = pdfTextCommand('Submission Summary', $margin, 796, 10);
+    $p1[] = pdfTextCommand('NEW ZEALAND GOVERNMENT', $margin, 828, 8);
+    $p1[] = pdfBoldTextCommand('Medsafe', $margin, 812, 18);
+    // Note: "Manatu Hauora" omits the macron (Manatū) because Helvetica
+    // Type1 does not include glyphs outside WinAnsiEncoding.
+    $p1[] = pdfTextCommand('Ministry of Health - Manatu Hauora', $margin, 798, 8);
+
+    // Form title block below banner
+    $p1[] = pdfFillColor(0.96, 0.97, 0.98);
+    $p1[] = pdfFilledRect(0, 742, $pageW, 50);
+    $p1[] = pdfFillColor($tealR, $tealG, $tealB);
+    $p1[] = pdfBoldTextCommand('Application for Approval to Prescribe a Psychedelic', $margin, 770, 13);
+    $p1[] = pdfFillColor(0.25, 0.25, 0.25);
+    $p1[] = pdfTextCommand('Under Regulation 22 of the Misuse of Drugs Regulations 1977', $margin, 754, 9);
+
+    // Submission metadata
+    $p1[] = pdfFillColor(0.4, 0.4, 0.4);
+    $p1[] = pdfTextCommand('Submission ID: ' . (string)($submission['id'] ?? ''), $margin, 728, 8);
+    $p1[] = pdfTextCommand('Date Submitted: ' . (string)($submission['submitted_at'] ?? ''), $margin, 716, 8);
     $p1[] = pdfFillColor(0, 0, 0);
 
-    $p1[] = pdfFillColor(0.3, 0.3, 0.3);
-    $p1[] = pdfTextCommand('Submission ID: ' . (string)($submission['id'] ?? ''), $margin, 770, 8);
-    $p1[] = pdfTextCommand('Date Submitted: ' . (string)($submission['submitted_at'] ?? ''), $margin, 758, 8);
-    $p1[] = pdfFillColor(0, 0, 0);
-
-    $p1[] = pdfSectionHeader('Applicant Details', $margin, 730, $contentW);
+    $p1[] = pdfSectionHeader('Applicant Details', $margin, 694, $contentW, $tealR, $tealG, $tealB);
 
     $fields1 = [
         ['Name', (string)($doctor['name'] ?? '')],
@@ -571,14 +595,14 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         ['Selected Indication', $indication],
         ['Application Date', (string)($form['date'] ?? '')],
     ];
-    $fieldY = 708;
+    $fieldY = 672;
     foreach ($fields1 as $f) {
         $p1[] = pdfLabelValue($f[0], $f[1], $margin, $fieldY);
         $fieldY -= 20;
     }
 
     $fieldY -= 6;
-    $p1[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p1[] = pdfFillColor($tealR, $tealG, $tealB);
     $p1[] = pdfBoldTextCommand('Clinical Experience & Training', $margin, $fieldY, 10);
     $p1[] = pdfFillColor(0, 0, 0);
     $fieldY -= 16;
@@ -592,18 +616,18 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         $fieldY -= 14;
     }
 
-    $p1[] = pdfPageFooter(1, 3, $pageW);
+    $p1[] = pdfPageFooter(1, 3, $pageW, $tealR, $tealG, $tealB);
 
     // -- Page 2: Product Details --
     $p2 = [];
-    $p2[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p2[] = pdfFillColor($tealR, $tealG, $tealB);
     $p2[] = pdfFilledRect(0, 792, $pageW, 50);
     $p2[] = pdfFillColor(1, 1, 1);
-    $p2[] = pdfBoldTextCommand('PRESCRIPTION APPLICATION', $margin, 810, 16);
-    $p2[] = pdfTextCommand('Product Details', $margin, 796, 10);
+    $p2[] = pdfBoldTextCommand('Medsafe', $margin, 818, 14);
+    $p2[] = pdfTextCommand('Application for Approval to Prescribe a Psychedelic', $margin, 802, 9);
     $p2[] = pdfFillColor(0, 0, 0);
 
-    $p2[] = pdfSectionHeader('Selected Products', $margin, 762, $contentW);
+    $p2[] = pdfSectionHeader('Selected Products', $margin, 762, $contentW, $tealR, $tealG, $tealB);
 
     $tableX = $margin;
     $tableY = 740;
@@ -613,7 +637,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $maxRows = 16;
 
     $headers = ['Product', 'Component', 'Strength', 'Form'];
-    $p2[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p2[] = pdfFillColor($tealR, $tealG, $tealB);
     $x = $tableX;
     $totalTableW = array_sum($tableW);
     $p2[] = pdfFilledRect($tableX, $tableY - $headerH, $totalTableW, $headerH);
@@ -668,7 +692,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $notesY = $y - 40;
     $sourcingNotes = (string)($form['sourcing_notes'] ?? '');
     if ($sourcingNotes !== '') {
-        $p2[] = pdfSectionHeader('Sourcing Notes', $margin, $notesY, $contentW);
+        $p2[] = pdfSectionHeader('Sourcing Notes', $margin, $notesY, $contentW, $tealR, $tealG, $tealB);
         $notesY -= 20;
         $noteLines = pdfWordWrap($sourcingNotes, 80);
         foreach ($noteLines as $line) {
@@ -677,18 +701,18 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         }
     }
 
-    $p2[] = pdfPageFooter(2, 3, $pageW);
+    $p2[] = pdfPageFooter(2, 3, $pageW, $tealR, $tealG, $tealB);
 
     // -- Page 3: Clinical Documentation & Signature --
     $p3 = [];
-    $p3[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p3[] = pdfFillColor($tealR, $tealG, $tealB);
     $p3[] = pdfFilledRect(0, 792, $pageW, 50);
     $p3[] = pdfFillColor(1, 1, 1);
-    $p3[] = pdfBoldTextCommand('PRESCRIPTION APPLICATION', $margin, 810, 16);
-    $p3[] = pdfTextCommand('Clinical Documentation & Signature', $margin, 796, 10);
+    $p3[] = pdfBoldTextCommand('Medsafe', $margin, 818, 14);
+    $p3[] = pdfTextCommand('Application for Approval to Prescribe a Psychedelic', $margin, 802, 9);
     $p3[] = pdfFillColor(0, 0, 0);
 
-    $p3[] = pdfSectionHeader('Clinical Documentation', $margin, 762, $contentW);
+    $p3[] = pdfSectionHeader('Clinical Documentation', $margin, 762, $contentW, $tealR, $tealG, $tealB);
 
     $docFields = [
         ['Supporting Evidence', (string)($form['supporting_evidence_notes'] ?? '')],
@@ -697,7 +721,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     ];
     $docY = 740;
     foreach ($docFields as $df) {
-        $p3[] = pdfFillColor(0.16, 0.24, 0.44);
+        $p3[] = pdfFillColor($tealR, $tealG, $tealB);
         $p3[] = pdfBoldTextCommand($df[0], $margin, $docY, 10);
         $p3[] = pdfFillColor(0, 0, 0);
         $docY -= 16;
@@ -710,7 +734,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     }
 
     $docY -= 10;
-    $p3[] = pdfSectionHeader('Signature', $margin, $docY, $contentW);
+    $p3[] = pdfSectionHeader('Signature', $margin, $docY, $contentW, $tealR, $tealG, $tealB);
     $docY -= 22;
     $sigMode = (string)($form['signature_mode'] ?? '');
     $sigDrawn = (string)($form['signature_drawn'] ?? '');
@@ -742,7 +766,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $p3[] = pdfTextCommand('Declaration: All submitted fields have been included in this PDF export.', $margin + 8, $declY, 9);
     $p3[] = pdfFillColor(0, 0, 0);
 
-    $p3[] = pdfPageFooter(3, 3, $pageW);
+    $p3[] = pdfPageFooter(3, 3, $pageW, $tealR, $tealG, $tealB);
 
     $stream1 = buildPdfPageStream([], $p1);
     $stream2 = buildPdfPageStream([], $p2);
@@ -929,12 +953,12 @@ function pdfLineCommand(float $x1, float $y1, float $x2, float $y2): string
     return number_format($x1, 2, '.', '') . ' ' . number_format($y1, 2, '.', '') . ' m ' . number_format($x2, 2, '.', '') . ' ' . number_format($y2, 2, '.', '') . ' l S';
 }
 
-function pdfSectionHeader(string $title, float $x, float $y, float $width): string
+function pdfSectionHeader(string $title, float $x, float $y, float $width, float $r = MEDSAFE_TEAL_R, float $g = MEDSAFE_TEAL_G, float $b = MEDSAFE_TEAL_B): string
 {
     $commands = [];
-    $commands[] = pdfFillColor(0.92, 0.94, 0.97);
+    $commands[] = pdfFillColor(0.92, 0.96, 0.95);
     $commands[] = pdfFilledRect($x, $y - 6, $width, 20);
-    $commands[] = pdfFillColor(0.16, 0.24, 0.44);
+    $commands[] = pdfFillColor($r, $g, $b);
     $commands[] = pdfFilledRect($x, $y - 6, 3, 20);
     $commands[] = pdfBoldTextCommand($title, $x + 10, $y, 11);
     $commands[] = pdfFillColor(0, 0, 0);
@@ -951,15 +975,14 @@ function pdfLabelValue(string $label, string $value, float $x, float $y): string
     return implode("\n", $commands);
 }
 
-function pdfPageFooter(int $pageNum, int $totalPages, float $pageWidth): string
+function pdfPageFooter(int $pageNum, int $totalPages, float $pageWidth, float $r = MEDSAFE_TEAL_R, float $g = MEDSAFE_TEAL_G, float $b = MEDSAFE_TEAL_B): string
 {
     $commands = [];
-    $commands[] = pdfStrokeColor(0.8, 0.8, 0.8);
-    $commands[] = pdfLineCommand(50, 40, $pageWidth - 50, 40);
-    $commands[] = pdfStrokeColor(0, 0, 0);
-    $commands[] = pdfFillColor(0.5, 0.5, 0.5);
-    $commands[] = pdfTextCommand('Page ' . $pageNum . ' of ' . $totalPages, $pageWidth / 2 - 20, 26, 8);
-    $commands[] = pdfTextCommand('Prescription Application', 50, 26, 8);
+    $commands[] = pdfFillColor($r, $g, $b);
+    $commands[] = pdfFilledRect(0, 40, $pageWidth, 1);
+    $commands[] = pdfFillColor(0.4, 0.4, 0.4);
+    $commands[] = pdfTextCommand('Medsafe - New Zealand Medicines and Medical Devices Safety Authority', 50, 26, 7);
+    $commands[] = pdfTextCommand('Page ' . $pageNum . ' of ' . $totalPages, $pageWidth - 100, 26, 8);
     $commands[] = pdfFillColor(0, 0, 0);
     return implode("\n", $commands);
 }
