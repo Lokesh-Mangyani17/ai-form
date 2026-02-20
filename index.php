@@ -538,40 +538,84 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         $indication .= ' - ' . $other;
     }
 
-    $page1Lines = [
-        ['PRESCRIPTION APPLICATION - SUBMISSION SUMMARY', 36, 805, 13],
-        ['Submission ID: ' . (string)($submission['id'] ?? ''), 36, 782, 10],
-        ['Submitted At: ' . (string)($submission['submitted_at'] ?? ''), 36, 768, 10],
-        ['Step 1 - Applicant Details', 36, 742, 12],
-        ['Name: ' . (string)($doctor['name'] ?? ''), 36, 722, 10],
-        ['Email: ' . (string)($doctor['email'] ?? ''), 36, 708, 10],
-        ['Phone: ' . (string)($doctor['phone'] ?? ''), 36, 694, 10],
-        ['CPN: ' . (string)($doctor['cpn'] ?? ''), 36, 680, 10],
-        ['Vocational Scope: ' . (string)($form['vocational_scope'] ?? ''), 36, 660, 10],
-        ['Clinical Experience & Training:', 36, 640, 10],
-        [(string)($form['clinical_experience'] ?? ''), 36, 626, 10],
-        ['Selected Indication: ' . $indication, 36, 602, 10],
-        ['Application Date: ' . (string)($form['date'] ?? ''), 36, 588, 10],
+    $margin = 50;
+    $pageW = 595;
+    $contentW = $pageW - $margin * 2;
+
+    // -- Page 1: Title + Applicant Details --
+    $p1 = [];
+    $p1[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p1[] = pdfFilledRect(0, 792, $pageW, 50);
+    $p1[] = pdfFillColor(1, 1, 1);
+    $p1[] = pdfBoldTextCommand('PRESCRIPTION APPLICATION', $margin, 810, 16);
+    $p1[] = pdfTextCommand('Submission Summary', $margin, 796, 10);
+    $p1[] = pdfFillColor(0, 0, 0);
+
+    $p1[] = pdfFillColor(0.3, 0.3, 0.3);
+    $p1[] = pdfTextCommand('Submission ID: ' . (string)($submission['id'] ?? ''), $margin, 770, 8);
+    $p1[] = pdfTextCommand('Date Submitted: ' . (string)($submission['submitted_at'] ?? ''), $margin, 758, 8);
+    $p1[] = pdfFillColor(0, 0, 0);
+
+    $p1[] = pdfSectionHeader('Applicant Details', $margin, 730, $contentW);
+
+    $fields1 = [
+        ['Name', (string)($doctor['name'] ?? '')],
+        ['Email', (string)($doctor['email'] ?? '')],
+        ['Phone', (string)($doctor['phone'] ?? '')],
+        ['CPN', (string)($doctor['cpn'] ?? '')],
+        ['Vocational Scope', (string)($form['vocational_scope'] ?? '')],
+        ['Selected Indication', $indication],
+        ['Application Date', (string)($form['date'] ?? '')],
     ];
+    $fieldY = 708;
+    foreach ($fields1 as $f) {
+        $p1[] = pdfLabelValue($f[0], $f[1], $margin, $fieldY);
+        $fieldY -= 20;
+    }
 
-    $page2Commands = [];
-    $page2Commands[] = pdfTextCommand('Step 2 - Product Details', 36, 805, 12);
+    $fieldY -= 6;
+    $p1[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p1[] = pdfBoldTextCommand('Clinical Experience & Training', $margin, $fieldY, 10);
+    $p1[] = pdfFillColor(0, 0, 0);
+    $fieldY -= 16;
+    $expText = (string)($form['clinical_experience'] ?? '');
+    $expLines = pdfWordWrap($expText, 80);
+    foreach ($expLines as $line) {
+        $p1[] = pdfTextCommand($line, $margin + 4, $fieldY, 9);
+        $fieldY -= 14;
+    }
 
-    $tableX = 24;
-    $tableY = 775;
-    $tableW = [200, 150, 90, 120];
-    $headerH = 28;
-    $rowH = 30;
-    $maxRows = 14;
+    $p1[] = pdfPageFooter(1, 3, $pageW);
+
+    // -- Page 2: Product Details --
+    $p2 = [];
+    $p2[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p2[] = pdfFilledRect(0, 792, $pageW, 50);
+    $p2[] = pdfFillColor(1, 1, 1);
+    $p2[] = pdfBoldTextCommand('PRESCRIPTION APPLICATION', $margin, 810, 16);
+    $p2[] = pdfTextCommand('Product Details', $margin, 796, 10);
+    $p2[] = pdfFillColor(0, 0, 0);
+
+    $p2[] = pdfSectionHeader('Selected Products', $margin, 762, $contentW);
+
+    $tableX = $margin;
+    $tableY = 740;
+    $tableW = [190, 130, 85, 90];
+    $headerH = 22;
+    $rowH = 22;
+    $maxRows = 16;
 
     $headers = ['Product', 'Component', 'Strength', 'Form'];
+    $p2[] = pdfFillColor(0.16, 0.24, 0.44);
     $x = $tableX;
+    $totalTableW = array_sum($tableW);
+    $p2[] = pdfFilledRect($tableX, $tableY - $headerH, $totalTableW, $headerH);
+    $p2[] = pdfFillColor(1, 1, 1);
     for ($i = 0; $i < count($tableW); $i++) {
-        $w = $tableW[$i];
-        $page2Commands[] = pdfRectCommand($x, $tableY - $headerH, $w, $headerH, false);
-        $page2Commands[] = pdfTextCommand($headers[$i], $x + 4, $tableY - 18, 10);
-        $x += $w;
+        $p2[] = pdfBoldTextCommand($headers[$i], $x + 6, $tableY - 15, 9);
+        $x += $tableW[$i];
     }
+    $p2[] = pdfFillColor(0, 0, 0);
 
     $rowsToRender = array_slice($products, 0, $maxRows);
     if (empty($rowsToRender)) {
@@ -579,8 +623,18 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     }
 
     $y = $tableY - $headerH;
+    $rowIdx = 0;
     foreach ($rowsToRender as $row) {
         $y -= $rowH;
+        if ($rowIdx % 2 === 0) {
+            $p2[] = pdfFillColor(0.94, 0.95, 0.97);
+            $p2[] = pdfFilledRect($tableX, $y, $totalTableW, $rowH);
+            $p2[] = pdfFillColor(0, 0, 0);
+        }
+        $p2[] = pdfStrokeColor(0.8, 0.8, 0.8);
+        $p2[] = pdfLineCommand($tableX, $y, $tableX + $totalTableW, $y);
+        $p2[] = pdfStrokeColor(0, 0, 0);
+
         $x = $tableX;
         $cells = [
             (string)($row['name'] ?? ''),
@@ -589,35 +643,105 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
             (string)($row['form'] ?? ''),
         ];
         for ($i = 0; $i < count($tableW); $i++) {
-            $w = $tableW[$i];
-            $page2Commands[] = pdfRectCommand($x, $y, $w, $rowH, false);
-            $page2Commands[] = pdfTextCommand($cells[$i], $x + 4, $y + 12, 9);
-            $x += $w;
+            $p2[] = pdfTextCommand($cells[$i], $x + 6, $y + 7, 9);
+            $x += $tableW[$i];
+        }
+        $rowIdx++;
+    }
+    $p2[] = pdfStrokeColor(0.8, 0.8, 0.8);
+    $p2[] = pdfLineCommand($tableX, $y, $tableX + $totalTableW, $y);
+    $p2[] = pdfStrokeColor(0, 0, 0);
+
+    if (count($products) > $maxRows) {
+        $p2[] = pdfFillColor(0.4, 0.4, 0.4);
+        $p2[] = pdfTextCommand('+ ' . (count($products) - $maxRows) . ' additional product(s) not shown', $tableX, $y - 16, 8);
+        $p2[] = pdfFillColor(0, 0, 0);
+    }
+
+    $notesY = $y - 40;
+    $sourcingNotes = (string)($form['sourcing_notes'] ?? '');
+    if ($sourcingNotes !== '') {
+        $p2[] = pdfSectionHeader('Sourcing Notes', $margin, $notesY, $contentW);
+        $notesY -= 20;
+        $noteLines = pdfWordWrap($sourcingNotes, 80);
+        foreach ($noteLines as $line) {
+            $p2[] = pdfTextCommand($line, $margin + 4, $notesY, 9);
+            $notesY -= 14;
         }
     }
 
-    if (count($products) > $maxRows) {
-        $page2Commands[] = pdfTextCommand('Additional products omitted: ' . (count($products) - $maxRows), 24, $y - 14, 9);
+    $p2[] = pdfPageFooter(2, 3, $pageW);
+
+    // -- Page 3: Clinical Documentation & Signature --
+    $p3 = [];
+    $p3[] = pdfFillColor(0.16, 0.24, 0.44);
+    $p3[] = pdfFilledRect(0, 792, $pageW, 50);
+    $p3[] = pdfFillColor(1, 1, 1);
+    $p3[] = pdfBoldTextCommand('PRESCRIPTION APPLICATION', $margin, 810, 16);
+    $p3[] = pdfTextCommand('Clinical Documentation & Signature', $margin, 796, 10);
+    $p3[] = pdfFillColor(0, 0, 0);
+
+    $p3[] = pdfSectionHeader('Clinical Documentation', $margin, 762, $contentW);
+
+    $docFields = [
+        ['Supporting Evidence', (string)($form['supporting_evidence_notes'] ?? '')],
+        ['Treatment Protocol', (string)($form['treatment_protocol_notes'] ?? '')],
+        ['Scientific Peer Review', (string)($form['scientific_peer_review_notes'] ?? '')],
+    ];
+    $docY = 740;
+    foreach ($docFields as $df) {
+        $p3[] = pdfFillColor(0.16, 0.24, 0.44);
+        $p3[] = pdfBoldTextCommand($df[0], $margin, $docY, 10);
+        $p3[] = pdfFillColor(0, 0, 0);
+        $docY -= 16;
+        $wrappedLines = pdfWordWrap($df[1], 80);
+        foreach ($wrappedLines as $wl) {
+            $p3[] = pdfTextCommand($wl, $margin + 4, $docY, 9);
+            $docY -= 14;
+        }
+        $docY -= 6;
     }
 
-    $page2Commands[] = pdfTextCommand('Sourcing Notes: ' . (string)($form['sourcing_notes'] ?? ''), 24, 220, 10);
+    $docY -= 10;
+    $p3[] = pdfSectionHeader('Signature', $margin, $docY, $contentW);
+    $docY -= 22;
+    $sigMode = (string)($form['signature_mode'] ?? '');
+    $sigDrawn = (string)($form['signature_drawn'] ?? '');
+    $sigUpload = (string)($form['signature_upload'] ?? 'Not uploaded');
+    $p3[] = pdfLabelValue('Signature Method', $sigMode !== '' ? ucfirst($sigMode) : 'Not specified', $margin, $docY);
+    $docY -= 20;
+    $p3[] = pdfLabelValue('Signature Drawn', $sigDrawn !== '' ? 'Provided' : 'Not provided', $margin, $docY);
+    $docY -= 20;
+    $p3[] = pdfLabelValue('Signature Upload', $sigUpload, $margin, $docY);
+    $docY -= 30;
 
-    $page3Lines = [
-        ['Step 3 - Clinical Documentation & Signature', 36, 805, 12],
-        ['Supporting Evidence: ' . (string)($form['supporting_evidence_notes'] ?? ''), 36, 778, 10],
-        ['Treatment Protocol: ' . (string)($form['treatment_protocol_notes'] ?? ''), 36, 754, 10],
-        ['Scientific Peer Review: ' . (string)($form['scientific_peer_review_notes'] ?? ''), 36, 730, 10],
-                ['Signature Mode: ' . (string)($form['signature_mode'] ?? ''), 36, 706, 10],
-        ['Signature Drawn: ' . ((string)($form['signature_drawn'] ?? '') !== '' ? 'Provided' : 'Not provided'), 36, 692, 10],
-        ['Signature Upload: ' . (string)($form['signature_upload'] ?? 'Not uploaded'), 36, 678, 10],
-        ['Declaration: All submitted fields have been included in this PDF export.', 36, 644, 10],
-    ];
+    // Signature image placeholder box
+    $sigBoxY = $docY - 70;
+    $p3[] = pdfStrokeColor(0.7, 0.7, 0.7);
+    $p3[] = '1.00 w';
+    $p3[] = pdfRectCommand($margin, $sigBoxY, 220, 70, false);
+    $p3[] = '0.50 w';
+    $p3[] = pdfStrokeColor(0, 0, 0);
+    if ($sigDrawn === '') {
+        $p3[] = pdfFillColor(0.6, 0.6, 0.6);
+        $p3[] = pdfTextCommand('Signature area', $margin + 60, $sigBoxY + 30, 9);
+        $p3[] = pdfFillColor(0, 0, 0);
+    }
 
-    $stream1 = buildPdfPageStream($page1Lines, []);
-    $stream2 = buildPdfPageStream([], $page2Commands);
-    $stream3 = buildPdfPageStream($page3Lines, []);
+    $declY = $sigBoxY - 30;
+    $p3[] = pdfFillColor(0.95, 0.95, 0.95);
+    $p3[] = pdfFilledRect($margin, $declY - 10, $contentW, 28);
+    $p3[] = pdfFillColor(0.2, 0.2, 0.2);
+    $p3[] = pdfTextCommand('Declaration: All submitted fields have been included in this PDF export.', $margin + 8, $declY, 9);
+    $p3[] = pdfFillColor(0, 0, 0);
 
-    return writeSimpleThreePagePdf($path, $stream1, $stream2, $stream3, (string)($form['signature_drawn'] ?? ''));
+    $p3[] = pdfPageFooter(3, 3, $pageW);
+
+    $stream1 = buildPdfPageStream([], $p1);
+    $stream2 = buildPdfPageStream([], $p2);
+    $stream3 = buildPdfPageStream([], $p3);
+
+    return writeSimpleThreePagePdf($path, $stream1, $stream2, $stream3, (string)($form['signature_drawn'] ?? ''), $sigBoxY);
 }
 
 function buildSubmissionProductRows(array $submission): array
@@ -661,41 +785,29 @@ function buildSubmissionProductRows(array $submission): array
     return $rows;
 }
 
-function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3, string $signatureDrawn = ''): bool
+function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3, string $signatureDrawn = '', float $sigBoxY = 548): bool
 {
+    $fontRes = '<< /F1 6 0 R /F2 10 0 R >>';
     $objects = [];
     $objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
     $objects[2] = '<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>';
-    $objects[3] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R >>';
-    $objects[4] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 8 0 R >>';
-    $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 9 0 R >>';
+    $objects[3] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' >> /Contents 7 0 R >>';
+    $objects[4] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' >> /Contents 8 0 R >>';
+    $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' >> /Contents 9 0 R >>';
     $objects[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+    $objects[10] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>';
 
     $signatureImage = buildSignatureJpegObjectFromDataUrl($signatureDrawn);
     if ($signatureImage) {
-        $imageObjNum = 10;
+        $imageObjNum = 11;
         $objects[$imageObjNum] = $signatureImage['object'];
-        $stream3 .= "
-q
-220 0 0 70 36 548 cm
-/SigIm Do
-Q
-";
-        $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> /XObject << /SigIm ' . $imageObjNum . ' 0 R >> >> /Contents 9 0 R >>';
+        $stream3 .= "\nq\n220 0 0 70 50 " . number_format($sigBoxY, 2, '.', '') . " cm\n/SigIm Do\nQ\n";
+        $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' /XObject << /SigIm ' . $imageObjNum . ' 0 R >> >> /Contents 9 0 R >>';
     }
 
-    $objects[7] = "<< /Length " . strlen($stream1) . " >>
-stream
-" . $stream1 . "
-endstream";
-    $objects[8] = "<< /Length " . strlen($stream2) . " >>
-stream
-" . $stream2 . "
-endstream";
-    $objects[9] = "<< /Length " . strlen($stream3) . " >>
-stream
-" . $stream3 . "
-endstream";
+    $objects[7] = "<< /Length " . strlen($stream1) . " >>\nstream\n" . $stream1 . "\nendstream";
+    $objects[8] = "<< /Length " . strlen($stream2) . " >>\nstream\n" . $stream2 . "\nendstream";
+    $objects[9] = "<< /Length " . strlen($stream3) . " >>\nstream\n" . $stream3 . "\nendstream";
 
     $pdf = buildPdfFromObjects($objects, 1);
     return file_put_contents($path, $pdf) !== false;
@@ -783,6 +895,91 @@ function pdfEscape(string $text): string
 {
     $text = preg_replace('/\s+/', ' ', trim($text)) ?? '';
     return str_replace(['\\', '(', ')'], ['\\\\', '\(', '\)'], $text);
+}
+
+function pdfBoldTextCommand(string $text, float $x, float $y, float $size = 10): string
+{
+    return 'BT /F2 ' . number_format($size, 2, '.', '') . ' Tf 1 0 0 1 ' . number_format($x, 2, '.', '') . ' ' . number_format($y, 2, '.', '') . ' Tm (' . pdfEscape($text) . ') Tj ET';
+}
+
+function pdfFillColor(float $r, float $g, float $b): string
+{
+    return number_format($r, 3, '.', '') . ' ' . number_format($g, 3, '.', '') . ' ' . number_format($b, 3, '.', '') . ' rg';
+}
+
+function pdfStrokeColor(float $r, float $g, float $b): string
+{
+    return number_format($r, 3, '.', '') . ' ' . number_format($g, 3, '.', '') . ' ' . number_format($b, 3, '.', '') . ' RG';
+}
+
+function pdfFilledRect(float $x, float $y, float $w, float $h): string
+{
+    return number_format($x, 2, '.', '') . ' ' . number_format($y, 2, '.', '') . ' ' . number_format($w, 2, '.', '') . ' ' . number_format($h, 2, '.', '') . ' re f';
+}
+
+function pdfLineCommand(float $x1, float $y1, float $x2, float $y2): string
+{
+    return number_format($x1, 2, '.', '') . ' ' . number_format($y1, 2, '.', '') . ' m ' . number_format($x2, 2, '.', '') . ' ' . number_format($y2, 2, '.', '') . ' l S';
+}
+
+function pdfSectionHeader(string $title, float $x, float $y, float $width): string
+{
+    $commands = [];
+    $commands[] = pdfFillColor(0.92, 0.94, 0.97);
+    $commands[] = pdfFilledRect($x, $y - 6, $width, 20);
+    $commands[] = pdfFillColor(0.16, 0.24, 0.44);
+    $commands[] = pdfFilledRect($x, $y - 6, 3, 20);
+    $commands[] = pdfBoldTextCommand($title, $x + 10, $y, 11);
+    $commands[] = pdfFillColor(0, 0, 0);
+    return implode("\n", $commands);
+}
+
+function pdfLabelValue(string $label, string $value, float $x, float $y): string
+{
+    $commands = [];
+    $commands[] = pdfFillColor(0.3, 0.3, 0.3);
+    $commands[] = pdfBoldTextCommand($label . ':', $x, $y, 9);
+    $commands[] = pdfFillColor(0, 0, 0);
+    $commands[] = pdfTextCommand($value, $x + 140, $y, 9);
+    return implode("\n", $commands);
+}
+
+function pdfPageFooter(int $pageNum, int $totalPages, float $pageWidth): string
+{
+    $commands = [];
+    $commands[] = pdfStrokeColor(0.8, 0.8, 0.8);
+    $commands[] = pdfLineCommand(50, 40, $pageWidth - 50, 40);
+    $commands[] = pdfStrokeColor(0, 0, 0);
+    $commands[] = pdfFillColor(0.5, 0.5, 0.5);
+    $commands[] = pdfTextCommand('Page ' . $pageNum . ' of ' . $totalPages, $pageWidth / 2 - 20, 26, 8);
+    $commands[] = pdfTextCommand('Prescription Application', 50, 26, 8);
+    $commands[] = pdfFillColor(0, 0, 0);
+    return implode("\n", $commands);
+}
+
+function pdfWordWrap(string $text, int $maxChars): array
+{
+    $text = trim($text);
+    if ($text === '') {
+        return ['N/A'];
+    }
+    $words = explode(' ', $text);
+    $lines = [];
+    $current = '';
+    foreach ($words as $word) {
+        if ($current === '') {
+            $current = $word;
+        } elseif (strlen($current) + 1 + strlen($word) <= $maxChars) {
+            $current .= ' ' . $word;
+        } else {
+            $lines[] = $current;
+            $current = $word;
+        }
+    }
+    if ($current !== '') {
+        $lines[] = $current;
+    }
+    return $lines;
 }
 
 function buildPdfFromObjects(array $objects, int $rootObj): string
