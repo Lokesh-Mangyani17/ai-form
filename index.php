@@ -417,12 +417,18 @@ function createRegulatorPdf(array $submission, string $path): array
         return [false, 'Medsafe PDF template file is missing. Please upload ApprovalToPrescribePsychedelics.pdf into data/.'];
     }
 
-    $ok = fillTemplatePdfFields(PDF_TEMPLATE_FILE, $path, buildPdfFieldValueMap($submission));
+    $valueMap = buildPdfFieldValueMap($submission);
+    $ok = fillTemplatePdfFields(PDF_TEMPLATE_FILE, $path, $valueMap);
     if ($ok) {
         return [true, null];
     }
 
-    return [false, 'Unable to write form fields into the Medsafe PDF template. Please ensure template has writable AcroForm text fields.'];
+    $overlayOk = overlayValuesOnTemplatePdf(PDF_TEMPLATE_FILE, $path, $valueMap);
+    if ($overlayOk) {
+        return [true, null];
+    }
+
+    return [false, 'Unable to write form fields into the Medsafe PDF template.'];
 }
 
 function buildPdfFieldValueMap(array $submission): array
@@ -445,6 +451,124 @@ function buildPdfFieldValueMap(array $submission): array
         'scientific_peer_review' => $submission['form']['scientific_peer_review_notes'] ?? '',
         'date' => $submission['form']['date'] ?? '',
     ];
+}
+
+function overlayValuesOnTemplatePdf(string $templatePath, string $outputPath, array $values): bool
+{
+    $pdf = @file_get_contents($templatePath);
+    if (!$pdf) {
+        return false;
+    }
+
+    preg_match_all('/(\d+)\s+0\s+obj\b(.*?)endobj/s', $pdf, $allObjs, PREG_SET_ORDER);
+    if (empty($allObjs)) {
+        return false;
+    }
+
+    $objects = [];
+    $maxObject = 0;
+    foreach ($allObjs as $obj) {
+        $num = (int)$obj[1];
+        $objects[$num] = $obj[2];
+        $maxObject = max($maxObject, $num);
+    }
+
+    $pageNum = 0;
+    foreach ($objects as $num => $content) {
+        if (preg_match('/\/Type\s*\/Page\b/', $content)) {
+            $pageNum = $num;
+            break;
+        }
+    }
+    if ($pageNum === 0) {
+        return false;
+    }
+
+    $pageObj = $objects[$pageNum];
+    $lines = [
+        ['Applicant: ' . ($values['name'] ?? ''), 42, 785],
+        ['Email: ' . ($values['email'] ?? ''), 42, 770],
+        ['Phone: ' . ($values['phone'] ?? ''), 42, 755],
+        ['CPN: ' . ($values['cpn'] ?? ''), 42, 740],
+        ['Vocational Scope: ' . ($values['vocational_scope'] ?? ''), 42, 715],
+        ['Clinical Experience: ' . ($values['clinical_experience'] ?? ''), 42, 700],
+        ['Products: ' . ($values['products'] ?? ''), 42, 675],
+        ['Indication: ' . ($values['indication'] ?? ''), 42, 660],
+        ['Source: ' . ($values['source'] ?? ''), 42, 645],
+        ['Supporting Evidence: ' . ($values['supporting_evidence'] ?? ''), 42, 630],
+        ['Treatment Protocol: ' . ($values['treatment_protocol'] ?? ''), 42, 615],
+        ['Scientific Peer Review: ' . ($values['scientific_peer_review'] ?? ''), 42, 600],
+        ['Date: ' . ($values['date'] ?? ''), 42, 585],
+    ];
+
+    $stream = "BT
+/F1 9 Tf
+0 g
+";
+    foreach ($lines as [$txt, $x, $y]) {
+        $stream .= sprintf("1 0 0 1 %d %d Tm (%s) Tj
+", $x, $y, encodePdfString((string)$txt));
+    }
+    $stream .= "ET";
+
+    $newStreamObj = $maxObject + 1;
+    $newStreamContent = "<< /Length " . strlen($stream) . " >>
+stream
+$stream
+endstream";
+
+    if (preg_match('/\/Contents\s+(\d+)\s+0\s+R/', $pageObj, $m)) {
+        $origRef = $m[1] . ' 0 R';
+        $pageObj = preg_replace('/\/Contents\s+\d+\s+0\s+R/', '/Contents [' . $origRef . ' ' . $newStreamObj . ' 0 R]', $pageObj, 1);
+    } elseif (preg_match('/\/Contents\s*\[(.*?)\]/s', $pageObj, $m)) {
+        $existing = trim($m[1]);
+        $pageObj = preg_replace('/\/Contents\s*\[(.*?)\]/s', '/Contents [' . $existing . ' ' . $newStreamObj . ' 0 R]', $pageObj, 1);
+    } else {
+        $pageObj = preg_replace('/>>\s*$/s', '/Contents ' . $newStreamObj . ' 0 R >>', trim($pageObj));
+    }
+
+    preg_match('/startxref\s*(\d+)\s*%%EOF/s', $pdf, $xrefMatch);
+    $prevXref = isset($xrefMatch[1]) ? (int)$xrefMatch[1] : null;
+    preg_match('/trailer\s*<<.*?\/Root\s+(\d+\s+\d+\s+R).*?>>/s', $pdf, $rootMatch);
+    $rootRef = $rootMatch[1] ?? '1 0 R';
+
+    $updates = [
+        $pageNum => $pageObj,
+        $newStreamObj => $newStreamContent,
+    ];
+    ksort($updates);
+
+    $append = "
+";
+    $offsets = [];
+    foreach ($updates as $num => $content) {
+        $offsets[$num] = strlen($pdf . $append);
+        $append .= $num . " 0 obj
+" . trim($content) . "
+endobj
+";
+    }
+
+    $xrefPos = strlen($pdf . $append);
+    $append .= "xref
+";
+    foreach ($updates as $num => $_) {
+        $append .= $num . " 1
+";
+        $append .= sprintf("%010d 00000 n 
+", $offsets[$num]);
+    }
+
+    $append .= 'trailer << /Size ' . ($newStreamObj + 1) . ' /Root ' . $rootRef;
+    if ($prevXref !== null) {
+        $append .= ' /Prev ' . $prevXref;
+    }
+    $append .= " >>
+startxref
+" . $xrefPos . "
+%%EOF";
+
+    return file_put_contents($outputPath, $pdf . $append) !== false;
 }
 
 function fillTemplatePdfFields(string $templatePath, string $outputPath, array $values): bool
