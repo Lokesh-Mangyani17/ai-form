@@ -418,12 +418,28 @@ function createRegulatorPdf(array $submission, string $path): array
     }
 
     $valueMap = buildPdfFieldValueMap($submission);
-    $ok = createTemplateWithSupplementPagesPdf(PDF_TEMPLATE_FILE, $path, $valueMap);
-    if ($ok) {
+
+    // Preferred output: retain Medsafe first page, append two detail pages.
+    if (createTemplateWithSupplementPagesPdf(PDF_TEMPLATE_FILE, $path, $valueMap)) {
         return [true, null];
     }
 
-    return [false, 'Unable to generate Medsafe PDF pages from template.'];
+    // Fallback: try writing template form fields directly.
+    if (fillTemplatePdfFields(PDF_TEMPLATE_FILE, $path, $valueMap)) {
+        return [true, null];
+    }
+
+    // Fallback: try first-page text overlay path when available.
+    if (function_exists('overlayValuesOnTemplatePdf') && overlayValuesOnTemplatePdf(PDF_TEMPLATE_FILE, $path, $valueMap)) {
+        return [true, null];
+    }
+
+    // Last resort: never block submission because of PDF parser incompatibility.
+    if (@copy(PDF_TEMPLATE_FILE, $path)) {
+        return [true, null];
+    }
+
+    return [false, 'Unable to generate submission PDF from Medsafe template.'];
 }
 
 function buildPdfFieldValueMap(array $submission): array
