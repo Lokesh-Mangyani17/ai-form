@@ -118,10 +118,28 @@ function renderPrescriptionProductFields(): void
     woocommerce_wp_text_input(['id' => '_prescription_source', 'label' => 'Sourced From']);
     woocommerce_wp_text_input(['id' => '_prescription_indications', 'label' => 'Indications (comma separated)']);
     woocommerce_wp_textarea_input([
-        'id' => '_prescription_indication_map',
-        'label' => 'Indication Mapping JSON',
+        'id' => '_prescription_supporting_evidence_map',
+        'label' => 'Supporting Evidence Mapping',
         'desc_tip' => true,
-        'description' => 'JSON by indication: {"Depression":{"supporting_evidence":"...","treatment_protocol":"...","scientific_peer_review":"..."}}',
+        'description' => 'One per line: Indication | supporting evidence text',
+    ]);
+    woocommerce_wp_textarea_input([
+        'id' => '_prescription_treatment_protocol_map',
+        'label' => 'Treatment Protocol Mapping',
+        'desc_tip' => true,
+        'description' => 'One per line: Indication | treatment protocol text',
+    ]);
+    woocommerce_wp_textarea_input([
+        'id' => '_prescription_scientific_peer_review_map',
+        'label' => 'Scientific Peer Review Mapping',
+        'desc_tip' => true,
+        'description' => 'One per line: Indication | scientific peer review text',
+    ]);
+    woocommerce_wp_textarea_input([
+        'id' => '_prescription_indication_map',
+        'label' => 'Indication Mapping JSON (optional)',
+        'desc_tip' => true,
+        'description' => 'Optional advanced JSON. Usually not needed if using mapping textareas above.',
     ]);
     echo '</div>';
 }
@@ -138,6 +156,9 @@ function savePrescriptionProductFields(int $productId): void
         '_prescription_form',
         '_prescription_source',
         '_prescription_indications',
+        '_prescription_supporting_evidence_map',
+        '_prescription_treatment_protocol_map',
+        '_prescription_scientific_peer_review_map',
         '_prescription_indication_map',
     ];
 
@@ -208,6 +229,54 @@ function isAdmin(): bool
     return ($_GET['page'] ?? 'form') === 'admin';
 }
 
+function parseIndicationLineMap(string $raw): array
+{
+    $map = [];
+    $lines = preg_split('/
+|
+|
+/', $raw) ?: [];
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '') {
+            continue;
+        }
+
+        $parts = preg_split('/\s*[|:]\s*/', $line, 2);
+        if (!$parts || count($parts) < 2) {
+            continue;
+        }
+
+        $indication = trim((string)$parts[0]);
+        $value = trim((string)$parts[1]);
+        if ($indication === '' || $value === '') {
+            continue;
+        }
+
+        $map[$indication] = $value;
+    }
+    return $map;
+}
+
+function buildIndicationMapFromInputs(array $data): array
+{
+    $supporting = parseIndicationLineMap((string)($data['supporting_evidence_map'] ?? ''));
+    $protocol = parseIndicationLineMap((string)($data['treatment_protocol_map'] ?? ''));
+    $peer = parseIndicationLineMap((string)($data['scientific_peer_review_map'] ?? ''));
+
+    $all = array_unique(array_merge(array_keys($supporting), array_keys($protocol), array_keys($peer)));
+    $map = [];
+    foreach ($all as $indication) {
+        $map[$indication] = [
+            'supporting_evidence' => $supporting[$indication] ?? '',
+            'treatment_protocol' => $protocol[$indication] ?? '',
+            'scientific_peer_review' => $peer[$indication] ?? '',
+        ];
+    }
+
+    return $map;
+}
+
 function getProducts(): array
 {
     if (isWordPressRuntime() && function_exists('wc_get_products')) {
@@ -219,6 +288,15 @@ function getProducts(): array
             $indicationMap = json_decode($indicationMapRaw, true);
             if (!is_array($indicationMap)) {
                 $indicationMap = [];
+            }
+
+            $uiMap = buildIndicationMapFromInputs([
+                'supporting_evidence_map' => (string)get_post_meta($pid, '_prescription_supporting_evidence_map', true),
+                'treatment_protocol_map' => (string)get_post_meta($pid, '_prescription_treatment_protocol_map', true),
+                'scientific_peer_review_map' => (string)get_post_meta($pid, '_prescription_scientific_peer_review_map', true),
+            ]);
+            if (!empty($uiMap)) {
+                $indicationMap = array_replace_recursive($indicationMap, $uiMap);
             }
 
             $indicationsRaw = (string)get_post_meta($pid, '_prescription_indications', true);
@@ -257,7 +335,7 @@ function saveProduct(array $data): array
         'form' => trim($data['form'] ?? ''),
         'source' => trim($data['source'] ?? ''),
         'indications' => array_values(array_filter(array_map('trim', explode(',', (string)($data['indications'] ?? ''))))),
-        'indication_map' => [],
+        'indication_map' => buildIndicationMapFromInputs($data),
     ];
     file_put_contents(PRODUCTS_FILE, json_encode($products, JSON_PRETTY_PRINT));
     return [true, 'Product added successfully.', null];
@@ -772,7 +850,7 @@ function emailPdfToDoctor(string $submissionId): array
     <?php if (isWordPressRuntime()): ?>
       <section class="card">
         <h2>WooCommerce Configuration</h2>
-        <p>Products are loaded from WooCommerce. Edit each product under <strong>WooCommerce → Products</strong> and fill prescription custom fields (component, strength, form, sourced from, indications, indication mapping JSON).</p>
+        <p>Products are loaded from WooCommerce. Edit each product under <strong>WooCommerce → Products</strong> and fill prescription custom fields (component, strength, form, sourced from, indications, and the indication mapping textareas).</p>
         <p>Doctor CPN is managed under <strong>Users → Profile</strong> via the new CPN field.</p>
       </section>
     <?php else: ?>
@@ -785,6 +863,15 @@ function emailPdfToDoctor(string $submissionId): array
           <input name="form" placeholder="Form" required />
           <input name="source" placeholder="Source" required />
           <input name="indications" placeholder="Indications (comma separated)" />
+          <label>Supporting Evidence Mapping (one per line: Indication | text)
+            <textarea name="supporting_evidence_map" rows="4" placeholder="Depression | Evidence summary"></textarea>
+          </label>
+          <label>Treatment Protocol Mapping (one per line: Indication | text)
+            <textarea name="treatment_protocol_map" rows="4" placeholder="Depression | Protocol summary"></textarea>
+          </label>
+          <label>Scientific Peer Review Mapping (one per line: Indication | text)
+            <textarea name="scientific_peer_review_map" rows="4" placeholder="Depression | Peer review summary"></textarea>
+          </label>
           <button type="submit">Add Product</button>
         </form>
       </section>

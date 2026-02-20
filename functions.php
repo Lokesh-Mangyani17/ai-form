@@ -94,9 +94,30 @@ function ai_form_render_prescription_product_fields(): void
     ]);
 
     woocommerce_wp_textarea_input([
+        'id' => '_prescription_supporting_evidence_map',
+        'label' => __('Supporting Evidence Mapping', 'ai-form'),
+        'description' => __('One per line: Indication | supporting evidence text', 'ai-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_textarea_input([
+        'id' => '_prescription_treatment_protocol_map',
+        'label' => __('Treatment Protocol Mapping', 'ai-form'),
+        'description' => __('One per line: Indication | treatment protocol text', 'ai-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_textarea_input([
+        'id' => '_prescription_scientific_peer_review_map',
+        'label' => __('Scientific Peer Review Mapping', 'ai-form'),
+        'description' => __('One per line: Indication | scientific peer review text', 'ai-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_textarea_input([
         'id' => '_prescription_indication_map',
-        'label' => __('Indication Mapping JSON', 'ai-form'),
-        'description' => __('JSON map for supporting evidence/treatment protocol/scientific peer review by indication.', 'ai-form'),
+        'label' => __('Indication Mapping JSON (optional)', 'ai-form'),
+        'description' => __('Optional advanced JSON map. Usually not needed if you use the mapping textareas above.', 'ai-form'),
         'desc_tip' => true,
     ]);
 
@@ -111,6 +132,9 @@ function ai_form_save_prescription_product_fields(int $product_id): void
         '_prescription_form',
         '_prescription_source',
         '_prescription_indications',
+        '_prescription_supporting_evidence_map',
+        '_prescription_treatment_protocol_map',
+        '_prescription_scientific_peer_review_map',
         '_prescription_indication_map',
     ];
 
