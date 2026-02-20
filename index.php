@@ -232,10 +232,7 @@ function isAdmin(): bool
 function parseIndicationLineMap(string $raw): array
 {
     $map = [];
-    $lines = preg_split('/
-|
-|
-/', $raw) ?: [];
+    $lines = preg_split('/\r\n|\r|\n/', $raw) ?: [];
     foreach ($lines as $line) {
         $line = trim($line);
         if ($line === '') {
@@ -923,26 +920,17 @@ function emailPdfToDoctor(string $submissionId): array
       <section class="step active" data-step="1">
         <div class="step-header"><h2>Step 1: Disclaimer & Applicant Details</h2><p>Review declaration and confirm your practitioner profile data.</p></div>
         <div class="disclaimer">
-          <p>1. This application is for prescribing/supplying/administering approved psychedelic-assisted treatment only.</p>
-          <p>2. The applicant confirms all details provided are complete and accurate.</p>
-          <p>3. Approval decisions are made by the relevant regulator and may require additional documents.</p>
-          <p>4. Clinical governance must be maintained under local legislation and policy.</p>
-          <p>5. Product use must align with approved indication and treatment protocols.</p>
-          <p>6. Any adverse events must be reported through the appropriate channels.</p>
-          <p>7. This digital form does not replace legal obligations for controlled medicines.</p>
-          <p>8. Supporting evidence may be audited and requested post-submission.</p>
-          <p>9. Submission implies consent to process data for compliance and regulatory review.</p>
-          <p>10. Electronic signature carries the same intent as a handwritten declaration.</p>
+          <p>This digital interface is provided by Allu Therapeutics as a specialised tool to facilitate the compilation and generation of a formal application to Medsafe under Regulation 22 of the Misuse of Drugs Regulations 1977. Use of this platform does not constitute medical or regulatory advice. The Prescribing Doctor, as the Applicant, remains the primary Health Agency under the Health Information Privacy Code 2020 and bears sole legal and clinical responsibility for the accuracy of the protocol, the selection of patients, and the provision of unapproved controlled drugs. Allu Therapeutics acts as a secure data processor; all private clinical data is encrypted and held in strict confidence, accessible only to the authorised prescriber to support their professional obligations and mandatory safety reporting to the Ministry of Health. By utilising this facilitation tool, the prescriber acknowledges that Medsafe’s Ministerial approval is subject to their own clinical expertise, independent scientific peer review, and adherence to the applicable professional standards.</p>
         </div>
         <div class="grid two">
           <label>Name<input value="<?= htmlspecialchars($doctor['name']) ?>" readonly /></label>
           <label>Email<input value="<?= htmlspecialchars($doctor['email']) ?>" readonly /></label>
           <label>Phone<input value="<?= htmlspecialchars($doctor['phone']) ?>" readonly /></label>
           <label>CPN<input value="<?= htmlspecialchars($doctor['cpn']) ?>" readonly /></label>
-          <label>1.8 Vocational Scope
+          <label>Vocational Scope
             <textarea name="vocational_scope" required><?= htmlspecialchars($doctorPrefs['vocational_scope']) ?></textarea>
           </label>
-          <label>1.9 Clinical Experience & Training
+          <label>Clinical Experience & Training
             <textarea name="clinical_experience" required><?= htmlspecialchars($doctorPrefs['clinical_experience']) ?></textarea>
           </label>
         </div>
@@ -952,7 +940,7 @@ function emailPdfToDoctor(string $submissionId): array
         <div class="step-header"><h2>Step 2: Product Details & Indication Mapping</h2><p>Select products and indication to auto-populate supporting sections.</p></div>
 
         <fieldset class="product-picker">
-          <legend>Products (multi-select)</legend>
+          <legend>Products</legend>
           <p class="hint">Tick one or more products. No Ctrl/Cmd key needed.</p>
           <div id="products" class="product-list" role="group" aria-label="Products">
             <?php foreach ($products as $p): ?>
@@ -977,22 +965,22 @@ function emailPdfToDoctor(string $submissionId): array
         </fieldset>
 
         <div class="grid two">
-          <label>Component (auto)
+          <label>Component
             <textarea id="componentAuto" readonly></textarea>
           </label>
-          <label>Strength (auto)
+          <label>Strength
             <textarea id="strengthAuto" readonly></textarea>
           </label>
-          <label>Form (auto)
+          <label>Form
             <textarea id="formAuto" readonly></textarea>
           </label>
-          <label>Sourced from (auto)
+          <label>Sourced from
             <textarea id="sourcingAuto" readonly></textarea>
             <textarea name="sourcing_notes" placeholder="Add/amend sourcing notes"></textarea>
           </label>
         </div>
 
-        <label>Indication (auto from selected products)
+        <label>Indication
           <select id="indicationSelect" name="indication" required>
             <option value="">Select indication</option>
           </select>
@@ -1001,17 +989,17 @@ function emailPdfToDoctor(string $submissionId): array
           <input type="text" name="indication_other" id="indicationOtherInput" placeholder="Enter custom indication" />
         </label>
 
-        <label>Supporting Evidence (auto by indication)
+        <label>Supporting Evidence
           <textarea id="supportingEvidenceAuto" readonly></textarea>
           <textarea name="supporting_evidence_notes" placeholder="Add/amend supporting evidence notes"></textarea>
         </label>
 
-        <label>Treatment Protocol (auto by indication)
+        <label>Treatment Protocol
           <textarea id="treatmentProtocolAuto" readonly></textarea>
           <textarea name="treatment_protocol_notes" placeholder="Add/amend treatment protocol notes"></textarea>
         </label>
 
-        <label>Scientific Peer Review (auto by indication)
+        <label>Scientific Peer Review
           <textarea id="peerReviewAuto" readonly></textarea>
           <textarea name="scientific_peer_review_notes" placeholder="Add/amend scientific peer review notes"></textarea>
         </label>
@@ -1156,6 +1144,9 @@ function syncIndicationAuto() {
 if (productWrap) {
   productWrap.addEventListener('change', syncProductAuto);
   syncProductAuto();
+}
+if (indicationSelect) {
+  indicationSelect.addEventListener('change', syncIndicationAuto);
 }
 if (submitBtn) {
   submitBtn.addEventListener('click', (e) => {
