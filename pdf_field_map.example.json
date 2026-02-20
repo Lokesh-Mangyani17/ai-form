@@ -1,0 +1,15 @@
+{
+  "ApplicantName": "name",
+  "Email": "email",
+  "Phone": "phone",
+  "CPN": "cpn",
+  "VocationalScope": "vocational_scope",
+  "ClinicalExperience": "clinical_experience",
+  "Products": "products",
+  "Indication": "indication",
+  "SourcedFrom": "source",
+  "SupportingEvidence": "supporting_evidence",
+  "TreatmentProtocol": "treatment_protocol",
+  "ScientificPeerReview": "scientific_peer_review",
+  "Date": "date"
+}

@@ -7,6 +7,7 @@ define('PRODUCTS_FILE', DATA_DIR . '/products.json');
 define('DOCTOR_PREFS_FILE', DATA_DIR . '/doctor_prefs.json');
 define('PDF_TEMPLATE_FILE', DATA_DIR . '/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_TEMPLATE_URL', 'https://www.medsafe.govt.nz/downloads/ApprovalToPrescribePsychedelics.pdf');
+define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
 
 bootstrapStorage();
 registerWordPressHooks();
@@ -421,7 +422,7 @@ function createRegulatorPdf(array $submission, string $path): array
         return [true, null];
     }
 
-    return [false, 'Unable to write form fields into the Medsafe PDF template.'];
+    return [false, 'Unable to write form fields into the Medsafe PDF template. Please verify field names via data/pdf_field_map.json mapping.'];
 }
 
 function buildPdfFieldValueMap(array $submission): array
@@ -472,41 +473,50 @@ function fillTemplatePdfFields(string $templatePath, string $outputPath, array $
     $rootRef = $rootMatch[1] ?? '1 0 R';
 
     $updates = [];
+    $map = getPdfFieldMapping();
+
     foreach ($objects as $num => $content) {
-        if (!preg_match('/\/T\s*\((.*?)\)/s', $content, $nameMatch)) {
-            continue;
-        }
-        if (!preg_match('/\/FT\s*\/Tx/', $content)) {
+        $fieldName = extractPdfFieldName($content);
+        if ($fieldName === null || $fieldName === '') {
             continue;
         }
 
-        $fieldName = decodePdfString($nameMatch[1]);
-        $fieldValue = resolveFieldValue($fieldName, $values);
+        $fieldValue = resolveFieldValue($fieldName, $values, $map);
         if ($fieldValue === null) {
             continue;
         }
 
         $escaped = encodePdfString($fieldValue);
-        $newContent = preg_replace('/\/V\s*\((?:\\.|[^\\)])*\)/s', '', $content);
-        $newContent = preg_replace('/\/DV\s*\((?:\\.|[^\\)])*\)/s', '', $newContent);
-        $newContent = preg_replace('/>>\s*$/s', '/V (' . $escaped . ') /DV (' . $escaped . ') >>', trim($newContent));
-        $updates[$num] = $newContent;
+        $newContent = preg_replace('/\/V\s*\((?:\.|[^\)])*\)/s', '', $content);
+        $newContent = preg_replace('/\/DV\s*\((?:\.|[^\)])*\)/s', '', $newContent);
+        $newContent = preg_replace('/\/V\s*<(?:[^>])*?>/s', '', $newContent);
+        $newContent = preg_replace('/\/DV\s*<(?:[^>])*?>/s', '', $newContent);
+
+        if (preg_match('/>>\s*$/s', trim($newContent))) {
+            $newContent = preg_replace('/>>\s*$/s', '/V (' . $escaped . ') /DV (' . $escaped . ') >>', trim($newContent));
+            $updates[$num] = $newContent;
+        }
     }
 
     if (empty($updates)) {
         return false;
     }
 
-    $append = "\n";
+    $append = "
+";
     $offsets = [];
     ksort($updates);
     foreach ($updates as $num => $content) {
         $offsets[$num] = strlen($pdf . $append);
-        $append .= $num . " 0 obj\n" . trim($content) . "\nendobj\n";
+        $append .= $num . " 0 obj
+" . trim($content) . "
+endobj
+";
     }
 
     $xrefPos = strlen($pdf . $append);
-    $append .= "xref\n";
+    $append .= "xref
+";
 
     $groups = [];
     $nums = array_keys($offsets);
@@ -530,56 +540,106 @@ function fillTemplatePdfFields(string $templatePath, string $outputPath, array $
     }
 
     foreach ($groups as [$gStart, $gEnd]) {
-        $append .= $gStart . ' ' . ($gEnd - $gStart + 1) . "\n";
+        $append .= $gStart . ' ' . ($gEnd - $gStart + 1) . "
+";
         for ($i = $gStart; $i <= $gEnd; $i++) {
-            $append .= sprintf("%010d 00000 n \n", $offsets[$i]);
+            $append .= sprintf("%010d 00000 n 
+", $offsets[$i]);
         }
     }
 
-    $append .= 'trailer << /Size ' . ($maxObject + 1) . ' /Root ' . $rootRef;
+    $append .= 'trailer << /Size ' . ($maxObject + 1) . ' /Root ' . $rootRef . ' /NeedAppearances true';
     if ($prevXref !== null) {
         $append .= ' /Prev ' . $prevXref;
     }
-    $append .= " >>\nstartxref\n" . $xrefPos . "\n%%EOF";
+    $append .= " >>
+startxref
+" . $xrefPos . "
+%%EOF";
 
     return file_put_contents($outputPath, $pdf . $append) !== false;
 }
 
-function resolveFieldValue(string $fieldName, array $values): ?string
+function extractPdfFieldName(string $content): ?string
 {
-    $n = strtolower(preg_replace('/[^a-z0-9]+/', '_', $fieldName));
-    $map = [
-        'name' => ['applicant_name', 'name'],
-        'email' => ['email'],
-        'phone' => ['phone', 'telephone', 'mobile'],
-        'cpn' => ['cpn'],
-        'vocational_scope' => ['vocational_scope', 'scope'],
-        'clinical_experience' => ['clinical_experience', 'experience', 'training'],
-        'products' => ['product', 'medicine', 'drug'],
-        'indication' => ['indication', 'condition'],
-        'source' => ['source', 'sourced_from', 'supplier'],
-        'supporting_evidence' => ['supporting_evidence', 'evidence'],
-        'treatment_protocol' => ['treatment_protocol', 'protocol'],
-        'scientific_peer_review' => ['scientific_peer_review', 'peer_review'],
-        'date' => ['date'],
+    if (preg_match('/\/T\s*\((.*?)\)/s', $content, $m)) {
+        return decodePdfString($m[1]);
+    }
+    if (preg_match('/\/T\s*<([0-9A-Fa-f]+)>/s', $content, $m)) {
+        return decodePdfHexString($m[1]);
+    }
+    return null;
+}
+
+function getPdfFieldMapping(): array
+{
+    $default = [
+        'applicantname' => 'name',
+        'fullname' => 'name',
+        'name' => 'name',
+        'email' => 'email',
+        'phone' => 'phone',
+        'mobile' => 'phone',
+        'cpn' => 'cpn',
+        'vocationalscope' => 'vocational_scope',
+        'clinicalexperience' => 'clinical_experience',
+        'products' => 'products',
+        'indication' => 'indication',
+        'source' => 'source',
+        'sourcedfrom' => 'source',
+        'supportingevidence' => 'supporting_evidence',
+        'treatmentprotocol' => 'treatment_protocol',
+        'scientificpeerreview' => 'scientific_peer_review',
+        'date' => 'date',
     ];
 
-    foreach ($map as $key => $tokens) {
-        foreach ($tokens as $token) {
-            if (str_contains($n, $token) && isset($values[$key])) {
-                return (string)$values[$key];
-            }
+    if (!file_exists(PDF_FIELD_MAP_FILE)) {
+        return $default;
+    }
+
+    $custom = json_decode((string)file_get_contents(PDF_FIELD_MAP_FILE), true);
+    if (!is_array($custom)) {
+        return $default;
+    }
+
+    foreach ($custom as $k => $v) {
+        $key = (string)preg_replace('/[^a-z0-9]+/', '', strtolower((string)$k));
+        $default[$key] = (string)$v;
+    }
+
+    return $default;
+}
+
+function decodePdfHexString(string $hex): string
+{
+    $bin = @hex2bin($hex);
+    if ($bin === false) {
+        return '';
+    }
+    if (str_starts_with($bin, "þÿ") || str_starts_with($bin, "ÿþ")) {
+        $u = @iconv('UTF-16', 'UTF-8//IGNORE', $bin);
+        if ($u !== false) {
+            return $u;
+        }
+    }
+    return preg_replace('/[^ -~]/', '', $bin) ?? '';
+}
+
+function resolveFieldValue(string $fieldName, array $values, array $map): ?string
+{
+    $compact = (string)preg_replace('/[^a-z0-9]+/', '', strtolower($fieldName));
+
+    if (isset($map[$compact]) && isset($values[$map[$compact]])) {
+        return (string)$values[$map[$compact]];
+    }
+
+    foreach ($map as $fieldToken => $valueKey) {
+        if (str_contains($compact, $fieldToken) && isset($values[$valueKey])) {
+            return (string)$values[$valueKey];
         }
     }
 
-    static $fallbackIndex = 0;
-    $fallbackKeys = array_keys($values);
-    if (isset($fallbackKeys[$fallbackIndex])) {
-        $k = $fallbackKeys[$fallbackIndex++];
-        return (string)$values[$k];
-    }
-
-    return '';
+    return null;
 }
 
 function decodePdfString(string $s): string
