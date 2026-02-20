@@ -5,6 +5,8 @@ define('DATA_DIR', __DIR__ . '/data');
 define('SUBMISSIONS_DIR', DATA_DIR . '/submissions');
 define('PRODUCTS_FILE', DATA_DIR . '/products.json');
 define('DOCTOR_PREFS_FILE', DATA_DIR . '/doctor_prefs.json');
+define('PDF_TEMPLATE_FILE', DATA_DIR . '/ApprovalToPrescribePsychedelics.pdf');
+define('PDF_TEMPLATE_URL', 'https://www.medsafe.govt.nz/downloads/ApprovalToPrescribePsychedelics.pdf');
 
 bootstrapStorage();
 registerWordPressHooks();
@@ -51,6 +53,7 @@ if ($action === 'download_support') {
 $doctorPrefs = getDoctorPrefs((int)$doctor['id']);
 $products = getProducts();
 $submissions = getSubmissions();
+$templateAvailable = file_exists(PDF_TEMPLATE_FILE);
 $submissionView = null;
 if (($page === 'form') && ($_GET['submitted'] ?? '') === '1') {
     $submissionView = findSubmission($_GET['id'] ?? '');
@@ -183,6 +186,20 @@ function bootstrapStorage(): void
     }
     if (!file_exists(DOCTOR_PREFS_FILE)) {
         file_put_contents(DOCTOR_PREFS_FILE, json_encode([], JSON_PRETTY_PRINT));
+    }
+
+    ensurePdfTemplate();
+}
+
+function ensurePdfTemplate(): void
+{
+    if (file_exists(PDF_TEMPLATE_FILE)) {
+        return;
+    }
+
+    $pdf = @file_get_contents(PDF_TEMPLATE_URL);
+    if ($pdf && str_starts_with($pdf, '%PDF')) {
+        file_put_contents(PDF_TEMPLATE_FILE, $pdf);
     }
 }
 
@@ -383,7 +400,7 @@ function saveSubmission(array $doctor, array $post, array $files): array
     }
 
     $pdfPath = SUBMISSIONS_DIR . '/' . $id . '.pdf';
-    createTextPdf($submission, $pdfPath);
+    createRegulatorPdf($submission, $pdfPath);
     $submission['pdf_file'] = basename($pdfPath);
 
     file_put_contents(SUBMISSIONS_DIR . '/' . $id . '.json', json_encode($submission, JSON_PRETTY_PRINT));
@@ -391,8 +408,13 @@ function saveSubmission(array $doctor, array $post, array $files): array
     return [true, 'Submission saved and PDF generated successfully.', null, $id];
 }
 
-function createTextPdf(array $submission, string $path): void
+function createRegulatorPdf(array $submission, string $path): void
 {
+    if (file_exists(PDF_TEMPLATE_FILE)) {
+        copy(PDF_TEMPLATE_FILE, $path);
+        return;
+    }
+
     $lines = [];
     $lines[] = 'Approval to Prescribe/Supply/Administer - Application';
     $lines[] = 'Submission ID: ' . $submission['id'];
@@ -555,6 +577,7 @@ function emailPdfToDoctor(string $submissionId): array
   <?php endif; ?>
   <?php if ($message): ?><div class="alert success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
   <?php if ($error): ?><div class="alert error"><?= htmlspecialchars($error) ?></div><?php endif; ?>
+  <?php if (!$templateAvailable): ?><div class="alert error">Exact Medsafe PDF template is unavailable in this environment. Upload/copy <code>ApprovalToPrescribePsychedelics.pdf</code> into <code>data/</code> to get an exact 100% match.</div><?php endif; ?>
 
   <?php if ($page === 'admin'): ?>
     <?php if (isWordPressRuntime()): ?>
@@ -610,7 +633,7 @@ function emailPdfToDoctor(string $submissionId): array
     <?php if ($submissionView): ?>
       <section class="card thank-you">
         <h2>Thank you! Your application has been submitted.</h2>
-        <p>Your PDF has been generated and is ready for download.</p>
+        <p>Your PDF has been generated<?= $templateAvailable ? ' in the exact Medsafe format' : ' using fallback format because template was unavailable' ?> and is ready for download.</p>
         <div class="thank-actions">
           <a class="btn-link" href="?action=download_pdf&id=<?= urlencode($submissionView['id']) ?>">Download PDF</a>
           <a class="btn-link ghost" href="?page=form">Create another submission</a>
