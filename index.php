@@ -12,8 +12,7 @@ define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
 bootstrapStorage();
 registerWordPressHooks();
 
-$requestPath = trim((string)parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/');
-$page = $_GET['page'] ?? ($requestPath === 'cannabis-education' ? 'cannabis-education' : 'form');
+$page = $_GET['page'] ?? 'form';
 $action = $_GET['action'] ?? null;
 $message = null;
 $error = null;
@@ -528,48 +527,75 @@ endstream";
         $pageObj = preg_replace('/>>\s*$/s', '/Contents ' . $newStreamObj . ' 0 R >>', trim($pageObj));
     }
 
-    preg_match('/startxref\s*(\d+)\s*%%EOF/s', $pdf, $xrefMatch);
-    $prevXref = isset($xrefMatch[1]) ? (int)$xrefMatch[1] : null;
-    preg_match('/trailer\s*<<.*?\/Root\s+(\d+\s+\d+\s+R).*?>>/s', $pdf, $rootMatch);
-    $rootRef = $rootMatch[1] ?? '1 0 R';
-
     $updates = [
         $pageNum => $pageObj,
         $newStreamObj => $newStreamContent,
     ];
-    ksort($updates);
 
-    $append = "
-";
-    $offsets = [];
+    $merged = $objects;
     foreach ($updates as $num => $content) {
-        $offsets[$num] = strlen($pdf . $append);
-        $append .= $num . " 0 obj
-" . trim($content) . "
-endobj
-";
+        $merged[$num] = $content;
     }
 
-    $xrefPos = strlen($pdf . $append);
-    $append .= "xref
-";
-    foreach ($updates as $num => $_) {
-        $append .= $num . " 1
-";
-        $append .= sprintf("%010d 00000 n 
-", $offsets[$num]);
+    $rootObject = 0;
+    if (preg_match('/trailer\s*<<.*?\/Root\s+(\d+)\s+\d+\s+R.*?>>/s', $pdf, $rootMatch)) {
+        $rootObject = (int)$rootMatch[1];
+    }
+    if ($rootObject === 0) {
+        foreach ($merged as $num => $content) {
+            if (preg_match('/\/Type\s*\/Catalog\b/', $content)) {
+                $rootObject = $num;
+                break;
+            }
+        }
+    }
+    if ($rootObject === 0) {
+        return false;
     }
 
-    $append .= 'trailer << /Size ' . ($newStreamObj + 1) . ' /Root ' . $rootRef;
-    if ($prevXref !== null) {
-        $append .= ' /Prev ' . $prevXref;
+    $rebuilt = rebuildPdfFromObjects($merged, $rootObject, $pdf);
+    if ($rebuilt === null) {
+        return false;
     }
-    $append .= " >>
-startxref
-" . $xrefPos . "
-%%EOF";
 
-    return file_put_contents($outputPath, $pdf . $append) !== false;
+    return file_put_contents($outputPath, $rebuilt) !== false;
+}
+
+function rebuildPdfFromObjects(array $objects, int $rootObject, string $originalPdf): ?string
+{
+    if ($rootObject <= 0 || empty($objects)) {
+        return null;
+    }
+
+    ksort($objects);
+    $maxObject = max(array_keys($objects));
+    $header = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+    if (preg_match('/^%PDF-\d\.\d/m', $originalPdf, $headerMatch)) {
+        $header = $headerMatch[0] . "\n%\xE2\xE3\xCF\xD3\n";
+    }
+
+    $body = '';
+    $offsets = [];
+    foreach ($objects as $num => $content) {
+        $offsets[$num] = strlen($header . $body);
+        $body .= $num . " 0 obj\n" . trim($content) . "\nendobj\n";
+    }
+
+    $xrefStart = strlen($header . $body);
+    $xref = "xref\n0 " . ($maxObject + 1) . "\n";
+    $xref .= "0000000000 65535 f \n";
+    for ($i = 1; $i <= $maxObject; $i++) {
+        if (isset($offsets[$i])) {
+            $xref .= sprintf("%010d 00000 n \n", $offsets[$i]);
+        } else {
+            $xref .= "0000000000 00000 f \n";
+        }
+    }
+
+    $trailer = 'trailer << /Size ' . ($maxObject + 1) . ' /Root ' . $rootObject . " 0 R >>\n";
+    $trailer .= "startxref\n" . $xrefStart . "\n%%EOF\n";
+
+    return $header . $body . $xref . $trailer;
 }
 
 function fillTemplatePdfFields(string $templatePath, string $outputPath, array $values): bool
@@ -932,7 +958,7 @@ function emailPdfToDoctor(string $submissionId): array
 <body>
 <div class="container">
   <header class="topbar">
-    <h1><?= $page === 'cannabis-education' ? 'Cannabis Education' : 'Prescription Form Development' ?></h1>
+    <h1>Prescription Form Development</h1>
   </header>
 
   <?php if (!empty($_SESSION['form_success'])): ?>
@@ -990,76 +1016,6 @@ function emailPdfToDoctor(string $submissionId): array
         <?php endforeach; ?>
         </tbody>
       </table>
-    </section>
-
-  <?php elseif ($page === 'cannabis-education'): ?>
-    <section class="card education-hero">
-      <p class="eyebrow">Patient Resource Hub</p>
-      <h2>Cannabis Education</h2>
-      <p class="hero-copy">Explore evidence-informed guidance on medicinal cannabis in New Zealand, including treatment pathways, safety considerations, and practical next steps for discussing options with your healthcare team.</p>
-      <div class="chip-row">
-        <span class="chip">Evidence-led</span>
-        <span class="chip">Patient-friendly</span>
-        <span class="chip">Clinically reviewed</span>
-      </div>
-    </section>
-
-    <section class="card education-grid">
-      <article>
-        <h3>What is medicinal cannabis?</h3>
-        <p>Medicinal cannabis refers to regulated products that contain cannabinoids such as THC and CBD. These products are prescribed by clinicians for specific medical indications and are different from non-medical cannabis use.</p>
-      </article>
-      <article>
-        <h3>When is it considered?</h3>
-        <p>It may be considered when first-line therapies have not delivered sufficient benefit, especially for persistent pain, sleep challenges, chemotherapy-associated symptoms, and selected neurological presentations.</p>
-      </article>
-      <article>
-        <h3>How treatment is monitored</h3>
-        <p>Treatment plans are individualized. Doctors usually start at low doses, review side effects, and adjust carefully based on symptom response, quality of life measures, and ongoing safety checks.</p>
-      </article>
-    </section>
-
-    <section class="card">
-      <h3>Treatment journey</h3>
-      <ol class="journey-list">
-        <li><strong>Clinical assessment:</strong> A clinician reviews your history, medications, and goals.</li>
-        <li><strong>Suitability check:</strong> Risks, contraindications, and expected benefits are discussed.</li>
-        <li><strong>Prescription & onboarding:</strong> You receive a clear dosing plan and education.</li>
-        <li><strong>Follow-up reviews:</strong> Progress is monitored with regular appointments.</li>
-      </ol>
-    </section>
-
-    <section class="card education-grid two-col">
-      <article>
-        <h3>Safety essentials</h3>
-        <ul>
-          <li>Do not drive or operate machinery if impaired.</li>
-          <li>Store products securely away from children and pets.</li>
-          <li>Tell your doctor about all medications and supplements.</li>
-          <li>Report side effects early, including dizziness or mood changes.</li>
-        </ul>
-      </article>
-      <article>
-        <h3>Frequently asked questions</h3>
-        <details>
-          <summary>Will I feel “high” on medicinal cannabis?</summary>
-          <p>Not always. CBD-dominant products are typically non-intoxicating, while THC-containing products may cause impairment in some people.</p>
-        </details>
-        <details>
-          <summary>How long before I notice benefits?</summary>
-          <p>Some effects may appear within days, while full assessment often takes several weeks of dose titration and review.</p>
-        </details>
-        <details>
-          <summary>Can I stop my other medications?</summary>
-          <p>Only under medical guidance. Never stop prescribed medicines abruptly unless advised by your doctor.</p>
-        </details>
-      </article>
-    </section>
-
-    <section class="card cta-card">
-      <h3>Ready to discuss your options?</h3>
-      <p>Book a consultation to review whether medicinal cannabis is appropriate for your condition and care plan.</p>
-      <a class="btn-link" href="?page=form">Start a consultation request</a>
     </section>
 
   <?php else: ?>
