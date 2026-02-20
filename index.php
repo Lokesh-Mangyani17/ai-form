@@ -9,16 +9,18 @@ define('DOCTOR_PREFS_FILE', DATA_DIR . '/doctor_prefs.json');
 define('PDF_TEMPLATE_FILE', DATA_DIR . '/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_TEMPLATE_URL', 'https://www.medsafe.govt.nz/downloads/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
-/** @var float Default Y position for signature box on page 3. */
-const PDF_DEFAULT_SIGNATURE_Y = 548;
+/** @var float Default Y position for signature box on page 6. */
+const PDF_DEFAULT_SIGNATURE_Y = 536;
 /** @var float Horizontal offset from label to value in label-value pairs. */
-const PDF_LABEL_VALUE_OFFSET = 140;
-/** @var float Medsafe teal red component (#00594C). */
-const MEDSAFE_TEAL_R = 0.000;
-/** @var float Medsafe teal green component (#00594C). */
-const MEDSAFE_TEAL_G = 0.349;
-/** @var float Medsafe teal blue component (#00594C). */
-const MEDSAFE_TEAL_B = 0.298;
+const PDF_LABEL_VALUE_OFFSET = 120;
+/** @var int Total number of pages in the generated PDF. */
+const PDF_TOTAL_PAGES = 6;
+/** @var float Medsafe purple red component (#573F7F). */
+const MEDSAFE_PURPLE_R = 0.341;
+/** @var float Medsafe purple green component (#573F7F). */
+const MEDSAFE_PURPLE_G = 0.247;
+/** @var float Medsafe purple blue component (#573F7F). */
+const MEDSAFE_PURPLE_B = 0.498;
 
 bootstrapStorage();
 registerWordPressHooks();
@@ -548,231 +550,539 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         $indication .= ' - ' . $other;
     }
 
-    $margin = 50;
-    $pageW = 595;
-    $contentW = $pageW - $margin * 2;
+    // Page dimensions (A4: 595.28 x 841.89)
+    $pageW = 595.28;
+    $pageH = 841.89;
+    $margin = 19.4;
+    $contentR = 576.0;
+    $bodyMargin = 20.8;
 
-    // Medsafe teal: #00594C – see MEDSAFE_TEAL_* constants.
-    $tealR = MEDSAFE_TEAL_R;
-    $tealG = MEDSAFE_TEAL_G;
-    $tealB = MEDSAFE_TEAL_B;
+    // Medsafe purple: #573F7F
+    $pR = MEDSAFE_PURPLE_R;
+    $pG = MEDSAFE_PURPLE_G;
+    $pB = MEDSAFE_PURPLE_B;
 
-    // -- Page 1: Title + Applicant Details --
+    $totalPages = PDF_TOTAL_PAGES;
+
+    // Helper: convert reference top-Y to PDF baseline Y
+    $yt = fn(float $topY, float $size) => pdfYFromTop($topY, $size, $pageH);
+
+    // ============================================================
+    // PAGE 1: Static Information Page
+    // ============================================================
     $p1 = [];
-    // Top teal banner
-    $p1[] = pdfFillColor($tealR, $tealG, $tealB);
-    $p1[] = pdfFilledRect(0, 792, $pageW, 70);
-    // White branding text
-    $p1[] = pdfFillColor(1, 1, 1);
-    $p1[] = pdfTextCommand('NEW ZEALAND GOVERNMENT', $margin, 828, 8);
-    $p1[] = pdfBoldTextCommand('Medsafe', $margin, 812, 18);
-    // Note: "Manatu Hauora" omits the macron (Manatū) because Helvetica
-    // Type1 does not include glyphs outside WinAnsiEncoding.
-    $p1[] = pdfTextCommand('Ministry of Health - Manatu Hauora', $margin, 798, 8);
 
-    // Form title block below banner
-    $p1[] = pdfFillColor(0.96, 0.97, 0.98);
-    $p1[] = pdfFilledRect(0, 742, $pageW, 50);
-    $p1[] = pdfFillColor($tealR, $tealG, $tealB);
-    $p1[] = pdfBoldTextCommand('Application for Approval to Prescribe a Psychedelic', $margin, 770, 13);
-    $p1[] = pdfFillColor(0.25, 0.25, 0.25);
-    $p1[] = pdfTextCommand('Under Regulation 22 of the Misuse of Drugs Regulations 1977', $margin, 754, 9);
+    // MEDSAFE branding text (placeholder for logo image)
+    $p1[] = pdfFillColor($pR, $pG, $pB);
+    $p1[] = pdfBoldTextCommand('MEDSAFE', 48, $yt(30, 20), 20);
+    $p1[] = pdfFillColor(0.3, 0.3, 0.3);
+    $p1[] = pdfTextCommand('New Zealand Medicines and', 48, $yt(50, 7), 7);
+    $p1[] = pdfTextCommand('Medical Devices Safety Authority', 48, $yt(58, 7), 7);
 
-    // Submission metadata
-    $p1[] = pdfFillColor(0.4, 0.4, 0.4);
-    $p1[] = pdfTextCommand('Submission ID: ' . (string)($submission['id'] ?? ''), $margin, 728, 8);
-    $p1[] = pdfTextCommand('Date Submitted: ' . (string)($submission['submitted_at'] ?? ''), $margin, 716, 8);
+    // "Application Form" title (top-right)
+    $p1[] = pdfFillColor($pR, $pG, $pB);
+    $p1[] = pdfBoldTextCommand('Application Form', 352.6, $yt(30.7, 26), 26);
+
+    // Title block with purple border
+    $titleBoxTop = 90.065;
+    $titleBoxBot = 189.0;
+    $p1[] = pdfStrokeColor($pR, $pG, $pB);
+    $p1[] = '0.50 w';
+    $p1[] = pdfRectCommand(18.0, $pageH - $titleBoxBot, $contentR - 18.0, $titleBoxBot - $titleBoxTop, false);
+
+    // Title text inside box
+    $p1[] = pdfFillColor($pR, $pG, $pB);
+    $p1[] = pdfBoldTextCommand('Approval to Prescribe/Supply/Administer', 28.4, $yt(95.6, 22), 22);
+    $p1[] = pdfTextCommand('Application for a New Approval (Psychedelic-assisted therapy)', 28.4, $yt(136.5, 16), 16);
+    $p1[] = pdfTextCommand('Misuse of Drugs Regulations 1977', 28.4, $yt(167.2, 11), 11);
+
+    // "INFORMATION FOR APPLICANTS" box
+    $infoBoxTop = 207.0;
+    $infoBoxBot = 378.0;
+    $p1[] = pdfStrokeColor(0, 0, 0);
+    $p1[] = '0.50 w';
+    $p1[] = pdfRectCommand(18.0, $pageH - $infoBoxBot, $contentR - 18.0, $infoBoxBot - $infoBoxTop, false);
+
     $p1[] = pdfFillColor(0, 0, 0);
+    $p1[] = pdfBoldTextCommand('INFORMATION FOR APPLICANTS', 28.7, $yt(206.8, 12), 12);
 
-    $p1[] = pdfSectionHeader('Applicant Details', $margin, 694, $contentW, $tealR, $tealG, $tealB);
-
-    $fields1 = [
-        ['Name', (string)($doctor['name'] ?? '')],
-        ['Email', (string)($doctor['email'] ?? '')],
-        ['Phone', (string)($doctor['phone'] ?? '')],
-        ['CPN', (string)($doctor['cpn'] ?? '')],
-        ['Vocational Scope', (string)($form['vocational_scope'] ?? '')],
-        ['Selected Indication', $indication],
-        ['Application Date', (string)($form['date'] ?? '')],
+    $bullets1 = [
+        'This form is used by a medical practitioner to make an application for approval to prescribe/supply/' . "\n" .
+        'administer controlled drugs that require approval under regulation 22 Misuse of Drugs Regulations 1977,' . "\n" .
+        'for psychedelic-assisted therapy outside of a research setting (for example psilocybin).',
+        'The applicant must be the medical practitioner applying for approval to conduct the activities.',
+        'For the application to be considered, all applicable sections of the application form must be completed,' . "\n" .
+        'and the required supporting information attached.',
+        'Before filling out this application you should make yourself familiar with the criteria Medsafe will use to' . "\n" .
+        'assess the application. Guidance is available on the Medsafe website (https://medsafe.govt.nz/profs/' . "\n" .
+        'psychedelics.asp).',
     ];
-    $fieldY = 672;
-    foreach ($fields1 as $f) {
-        $p1[] = pdfLabelValue($f[0], $f[1], $margin, $fieldY);
-        $fieldY -= 20;
+
+    $bulletY = 227.0;
+    foreach ($bullets1 as $bullet) {
+        $p1[] = pdfTextCommand("\x95", 44.4, $yt($bulletY, 11), 11);
+        $bLines = explode("\n", $bullet);
+        foreach ($bLines as $bl) {
+            $p1[] = pdfTextCommand(trim($bl), 55.4, $yt($bulletY, 11), 11);
+            $bulletY += 13.2;
+        }
+        $bulletY += 6;
     }
 
-    $fieldY -= 6;
-    $p1[] = pdfFillColor($tealR, $tealG, $tealB);
-    $p1[] = pdfBoldTextCommand('Clinical Experience & Training', $margin, $fieldY, 10);
+    // "APPLICATION FORM SUBMISSION" box
+    $subBoxTop = 396.0;
+    $subBoxBot = 522.0;
+    $p1[] = pdfStrokeColor(0, 0, 0);
+    $p1[] = pdfRectCommand(18.0, $pageH - $subBoxBot, $contentR - 18.0, $subBoxBot - $subBoxTop, false);
+
     $p1[] = pdfFillColor(0, 0, 0);
-    $fieldY -= 16;
-    $expText = (string)($form['clinical_experience'] ?? '');
-    $expLines = pdfWordWrap($expText, 80);
-    if (empty($expLines)) {
-        $expLines = ['N/A'];
-    }
-    foreach ($expLines as $line) {
-        $p1[] = pdfTextCommand($line, $margin + 4, $fieldY, 9);
-        $fieldY -= 14;
+    $p1[] = pdfBoldTextCommand('APPLICATION FORM SUBMISSION', 28.5, $yt(395.8, 12), 12);
+
+    $bullets2 = [
+        'This application form can be completed electronically using a pdf reader. The current version of Adobe' . "\n" .
+        'Reader, available free of charge from the Adobe website (https://get.adobe.com/reader) is' . "\n" .
+        'recommended.',
+        'The completed application form should be submitted with any supporting documents, by the applicant, to' . "\n" .
+        'Medsafe by email (medicinescontrol@health.govt.nz). A copy of the form should be retained for the' . "\n" .
+        'applicant\'s records.',
+    ];
+
+    $bulletY = 416.0;
+    foreach ($bullets2 as $bullet) {
+        $p1[] = pdfTextCommand("\x95", 44.4, $yt($bulletY, 11), 11);
+        $bLines = explode("\n", $bullet);
+        foreach ($bLines as $bl) {
+            $p1[] = pdfTextCommand(trim($bl), 55.4, $yt($bulletY, 11), 11);
+            $bulletY += 13.2;
+        }
+        $bulletY += 6;
     }
 
-    $p1[] = pdfPageFooter(1, 3, $pageW, $tealR, $tealG, $tealB);
+    $p1[] = pdfMedsafeFooter(1, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
 
-    // -- Page 2: Product Details --
+    // ============================================================
+    // PAGE 2: Section 1 - Applicant
+    // ============================================================
     $p2 = [];
-    $p2[] = pdfFillColor($tealR, $tealG, $tealB);
-    $p2[] = pdfFilledRect(0, 792, $pageW, 50);
-    $p2[] = pdfFillColor(1, 1, 1);
-    $p2[] = pdfBoldTextCommand('Medsafe', $margin, 818, 14);
-    $p2[] = pdfTextCommand('Application for Approval to Prescribe a Psychedelic', $margin, 802, 9);
+
+    // Section title
+    $p2[] = pdfFillColor($pR, $pG, $pB);
+    $p2[] = pdfBoldTextCommand('Section 1: Applicant', $margin, $yt(17.7, 18), 18);
+    $p2[] = pdfTextCommand('The Applicant is the medical practitioner completing this form, who is applying for the Approval.', $margin, $yt(43.6, 10.5), 10.5);
     $p2[] = pdfFillColor(0, 0, 0);
 
-    $p2[] = pdfSectionHeader('Selected Products', $margin, 762, $contentW, $tealR, $tealG, $tealB);
+    // Field labels with input boxes
+    // [label, labelY_top, boxLeft, boxRight, isShortBox]
+    $fieldDefs = [
+        ['1.1. Title:', 78.5, 117.13, 240.17],
+        ['1.2. First name:', 105.3, 117.13, 573.17],
+        ['1.3. Preferred name:', 132.5, 117.59, 573.17],
+        ['1.4. Surname:', 159.5, 117.13, 573.17],
+    ];
 
-    $tableX = $margin;
-    $tableY = 740;
-    $tableW = [190, 130, 85, 90];
-    $headerH = 22;
-    $rowH = 22;
-    $maxRows = 16;
+    $doctorName = (string)($doctor['name'] ?? '');
+    $nameParts = explode(' ', $doctorName, 2);
+    $firstName = $nameParts[0] ?? '';
+    $surname = $nameParts[1] ?? '';
+    $fieldValues = ['', $firstName, '', $surname];
 
-    $headers = ['Product', 'Component', 'Strength', 'Form'];
-    $p2[] = pdfFillColor($tealR, $tealG, $tealB);
-    $x = $tableX;
-    $totalTableW = array_sum($tableW);
-    $p2[] = pdfFilledRect($tableX, $tableY - $headerH, $totalTableW, $headerH);
-    $p2[] = pdfFillColor(1, 1, 1);
-    for ($i = 0; $i < count($tableW); $i++) {
-        $p2[] = pdfBoldTextCommand($headers[$i], $x + 6, $tableY - 15, 9);
-        $x += $tableW[$i];
-    }
-    $p2[] = pdfFillColor(0, 0, 0);
-
-    $rowsToRender = array_slice($products, 0, $maxRows);
-    if (empty($rowsToRender)) {
-        $rowsToRender[] = ['name' => '-', 'component' => '-', 'strength' => '-', 'form' => '-'];
-    }
-
-    $y = $tableY - $headerH;
-    $rowIdx = 0;
-    foreach ($rowsToRender as $row) {
-        $y -= $rowH;
-        if ($rowIdx % 2 === 0) {
-            $p2[] = pdfFillColor(0.94, 0.95, 0.97);
-            $p2[] = pdfFilledRect($tableX, $y, $totalTableW, $rowH);
-            $p2[] = pdfFillColor(0, 0, 0);
-        }
-        $p2[] = pdfStrokeColor(0.8, 0.8, 0.8);
-        $p2[] = pdfLineCommand($tableX, $y, $tableX + $totalTableW, $y);
+    foreach ($fieldDefs as $idx => $fd) {
+        $p2[] = pdfTextCommand($fd[0], $bodyMargin, $yt($fd[1], 10), 10);
+        $boxX = $fd[2];
+        $boxW = $fd[3] - $fd[2];
+        $boxY = $pageH - $fd[1] - 15.84;  // box top aligns with label
+        $boxH = 19.84;
         $p2[] = pdfStrokeColor(0, 0, 0);
-
-        $x = $tableX;
-        $cells = [
-            (string)($row['name'] ?? ''),
-            (string)($row['component'] ?? ''),
-            (string)($row['strength'] ?? ''),
-            (string)($row['form'] ?? ''),
-        ];
-        for ($i = 0; $i < count($tableW); $i++) {
-            $p2[] = pdfTextCommand($cells[$i], $x + 6, $y + 7, 9);
-            $x += $tableW[$i];
+        $p2[] = '0.50 w';
+        $p2[] = pdfRectCommand($boxX, $boxY, $boxW, $boxH, false);
+        if (isset($fieldValues[$idx]) && $fieldValues[$idx] !== '') {
+            $p2[] = pdfTextCommand($fieldValues[$idx], $boxX + 4, $boxY + 5, 10);
         }
-        $rowIdx++;
     }
-    $p2[] = pdfStrokeColor(0.8, 0.8, 0.8);
-    $p2[] = pdfLineCommand($tableX, $y, $tableX + $totalTableW, $y);
+
+    // "Contact details" sub-heading
+    $p2[] = pdfBoldTextCommand('Contact details', $margin, $yt(187.8, 10), 10);
+
+    // Email and Phone fields
+    $contactFields = [
+        ['1.5. Email:', 213.5, 117.13, 573.17, (string)($doctor['email'] ?? '')],
+        ['1.6. Phone:', 240.5, 117.13, 294.17, (string)($doctor['phone'] ?? '')],
+    ];
+    foreach ($contactFields as $cf) {
+        $p2[] = pdfTextCommand($cf[0], $bodyMargin, $yt($cf[1], 10), 10);
+        $boxX = $cf[2];
+        $boxW = $cf[3] - $cf[2];
+        $boxY = $pageH - $cf[1] - 15.84;
+        $boxH = 19.84;
+        $p2[] = pdfRectCommand($boxX, $boxY, $boxW, $boxH, false);
+        if ($cf[4] !== '') {
+            $p2[] = pdfTextCommand($cf[4], $boxX + 4, $boxY + 5, 10);
+        }
+    }
+
+    // "Health practitioner registration details" sub-heading
+    $p2[] = pdfBoldTextCommand('Health practitioner registration details', $margin, $yt(268.7, 10), 10);
+
+    // HPI-CPN field
+    $cpnVal = (string)($doctor['cpn'] ?? '');
+    $p2[] = pdfTextCommand('1.7. HPI-CPN:', $bodyMargin, $yt(294.5, 10), 10);
+    $p2[] = pdfRectCommand(117.13, $pageH - 294.5 - 15.84, 294.17 - 117.13, 19.84, false);
+    if ($cpnVal !== '') {
+        $p2[] = pdfTextCommand($cpnVal, 121.13, $pageH - 294.5 - 10.84, 10);
+    }
+
+    // Vocational scope question
+    $p2[] = pdfTextCommand('1.8. Does your annual practicing certificate (APC) include vocational scope(s)?', $bodyMargin, $yt(325.5, 10), 10);
+
+    // Checkboxes
+    $vocScope = (string)($form['vocational_scope'] ?? '');
+    $hasScope = $vocScope !== '';
+
+    // No checkbox
     $p2[] = pdfStrokeColor(0, 0, 0);
-
-    if (count($products) > $maxRows) {
-        $p2[] = pdfFillColor(0.4, 0.4, 0.4);
-        $p2[] = pdfTextCommand('+ ' . (count($products) - $maxRows) . ' additional product(s) not shown', $tableX, $y - 16, 8);
+    $p2[] = pdfRectCommand(47.83, $pageH - 355.5, 10, 10, false);
+    if (!$hasScope) {
         $p2[] = pdfFillColor(0, 0, 0);
+        $p2[] = pdfBoldTextCommand('X', 49.5, $pageH - 353.5, 9);
+    }
+    $p2[] = pdfFillColor(0, 0, 0);
+    $p2[] = pdfTextCommand('No', 63.4, $yt(343.0, 10), 10);
+
+    // Yes checkbox
+    $p2[] = pdfRectCommand(47.83, $pageH - 373.5, 10, 10, false);
+    if ($hasScope) {
+        $p2[] = pdfFillColor(0, 0, 0);
+        $p2[] = pdfBoldTextCommand('X', 49.5, $pageH - 371.5, 9);
+    }
+    $p2[] = pdfFillColor(0, 0, 0);
+    $p2[] = pdfTextCommand('Yes, please specify:', 63.1, $yt(361.0, 10), 10);
+
+    // Vocational scope text box
+    $p2[] = pdfRectCommand(47.83, $pageH - 429.17, 573.17 - 47.83, 429.17 - 380.84, false);
+    if ($hasScope) {
+        $scopeLines = pdfWordWrap($vocScope, 90);
+        $scopeY = 393;
+        foreach ($scopeLines as $sl) {
+            $p2[] = pdfTextCommand($sl, 52, $yt($scopeY, 9), 9);
+            $scopeY += 12;
+        }
     }
 
-    $notesY = $y - 40;
+    // "Clinical expertise and training" sub-heading
+    $p2[] = pdfBoldTextCommand('Clinical expertise and training', $margin, $yt(448.8, 10), 10);
+
+    // Clinical experience question
+    $p2[] = pdfTextCommand('1.9. Describe the clinical experience and training you hold that is applicable to the proposed use of the product:', $bodyMargin, $yt(469.5, 10), 10);
+
+    // Large text box for clinical experience
+    $p2[] = pdfRectCommand(47.83, $pageH - 798.17, 573.17 - 47.83, 798.17 - 488.84, false);
+    $expText = (string)($form['clinical_experience'] ?? '');
+    if ($expText !== '') {
+        $expLines = pdfWordWrap($expText, 90);
+        $expY = 500;
+        foreach ($expLines as $el) {
+            if ($expY > 790) {
+                break;
+            }
+            $p2[] = pdfTextCommand($el, 52, $yt($expY, 9), 9);
+            $expY += 12;
+        }
+    }
+
+    $p2[] = pdfMedsafeFooter(2, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+
+    // ============================================================
+    // PAGE 3: Section 2 - Product Details
+    // ============================================================
+    $p3 = [];
+
+    $p3[] = pdfFillColor($pR, $pG, $pB);
+    $p3[] = pdfBoldTextCommand('Section 2: Product Details', $margin, $yt(17.7, 18), 18);
+    $p3[] = pdfFillColor(0, 0, 0);
+
+    // Question 2.1
+    $p3[] = pdfTextCommand('2.1. This Application is being made to prescribe/supply/administer the following product(s):', $bodyMargin, $yt(68.3, 10), 10);
+
+    // Note accent bar (gray bg + purple left stripe)
+    $p3[] = pdfFillColor(0.882, 0.882, 0.882);
+    $p3[] = pdfFilledRect(36.0, $pageH - 117.0, 540.0, 27.0);
+    $p3[] = pdfFillColor($pR, $pG, $pB);
+    $p3[] = pdfFilledRect(27.0, $pageH - 117.0, 9.0, 27.0);
+    $p3[] = pdfFillColor(0, 0, 0);
+
+    // Note text
+    $p3[] = pdfBoldTextCommand('Note:', 37.4, $yt(91.2, 9), 9);
+    $p3[] = pdfTextCommand('For each product please provide supporting documentation to demonstrate it is pharmaceutical grade (including, for example, a', 62.9, $yt(91.3, 9), 9);
+    $p3[] = pdfTextCommand('certificate of analysis).', 37.4, $yt(102.1, 9), 9);
+
+    // Product table - outer border
+    $tableTop = 135.0;
+    $tableBot = 437.66;
+    $tableX = 45.0;
+    $tableR = 567.83;
+    $tableW_total = $tableR - $tableX;
+    $tableH = $tableBot - $tableTop;
+    $p3[] = pdfStrokeColor(0, 0, 0);
+    $p3[] = '0.50 w';
+    $p3[] = pdfRectCommand($tableX, $pageH - $tableBot, $tableW_total, $tableH, false);
+
+    // Column positions
+    $colX = [45.0, 224.97, 339.26, 453.55, 567.83];
+    $colW = [];
+    for ($c = 0; $c < 4; $c++) {
+        $colW[] = $colX[$c + 1] - $colX[$c];
+    }
+
+    // Header row
+    $hdrRowBot = 163.37;
+    $p3[] = pdfRectCommand($tableX, $pageH - $hdrRowBot, $colX[1] - $tableX, $hdrRowBot - $tableTop, false);
+
+    // Column headers
+    $p3[] = pdfBoldTextCommand('Product', 46.4, $yt(141.5, 10), 10);
+    $p3[] = pdfBoldTextCommand('Component', 254.3, $yt(135.5, 10), 10);
+    $p3[] = pdfBoldTextCommand('(e.g. psilocybin)', 244.1, $yt(147.5, 10), 10);
+    $p3[] = pdfBoldTextCommand('Strength', 375.8, $yt(141.5, 10), 10);
+    $p3[] = pdfBoldTextCommand('Form', 498.2, $yt(141.5, 10), 10);
+
+    // Data rows
+    $rowTops = [163.37, 218.23, 273.08, 327.94, 382.80];
+    $rowBots = [218.23, 273.08, 327.94, 382.80, 437.66];
+    $maxRows = count($rowTops);
+
+    for ($r = 0; $r < $maxRows; $r++) {
+        $rTop = $rowTops[$r];
+        $rBot = $rowBots[$r];
+        $rH = $rBot - $rTop;
+        for ($c = 0; $c < 4; $c++) {
+            $p3[] = pdfRectCommand($colX[$c], $pageH - $rBot, $colW[$c], $rH, false);
+        }
+        if (isset($products[$r])) {
+            $row = $products[$r];
+            $cellTextY = $rTop + 12;
+            $p3[] = pdfTextCommand((string)($row['name'] ?? ''), $colX[0] + 4, $yt($cellTextY, 9), 9);
+            $p3[] = pdfTextCommand((string)($row['component'] ?? ''), $colX[1] + 4, $yt($cellTextY, 9), 9);
+            $p3[] = pdfTextCommand((string)($row['strength'] ?? ''), $colX[2] + 4, $yt($cellTextY, 9), 9);
+            $p3[] = pdfTextCommand((string)($row['form'] ?? ''), $colX[3] + 4, $yt($cellTextY, 9), 9);
+        }
+    }
+
+    // Question 2.2 - Sourcing
+    $p3[] = pdfTextCommand('2.2. Describe where the above product(s) are intended to be sourced from:', $bodyMargin, $yt(469.5, 10), 10);
+
+    // Sourcing text box
+    $p3[] = pdfRectCommand(47.83, $pageH - 798.17, 573.17 - 47.83, 798.17 - 488.84, false);
     $sourcingNotes = (string)($form['sourcing_notes'] ?? '');
     if ($sourcingNotes !== '') {
-        $p2[] = pdfSectionHeader('Sourcing Notes', $margin, $notesY, $contentW, $tealR, $tealG, $tealB);
-        $notesY -= 20;
-        $noteLines = pdfWordWrap($sourcingNotes, 80);
-        foreach ($noteLines as $line) {
-            $p2[] = pdfTextCommand($line, $margin + 4, $notesY, 9);
-            $notesY -= 14;
+        $srcLines = pdfWordWrap($sourcingNotes, 90);
+        $srcY = 500;
+        foreach ($srcLines as $sl) {
+            if ($srcY > 790) {
+                break;
+            }
+            $p3[] = pdfTextCommand($sl, 52, $yt($srcY, 9), 9);
+            $srcY += 12;
         }
     }
 
-    $p2[] = pdfPageFooter(2, 3, $pageW, $tealR, $tealG, $tealB);
+    $p3[] = pdfMedsafeFooter(3, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
 
-    // -- Page 3: Clinical Documentation & Signature --
-    $p3 = [];
-    $p3[] = pdfFillColor($tealR, $tealG, $tealB);
-    $p3[] = pdfFilledRect(0, 792, $pageW, 50);
-    $p3[] = pdfFillColor(1, 1, 1);
-    $p3[] = pdfBoldTextCommand('Medsafe', $margin, 818, 14);
-    $p3[] = pdfTextCommand('Application for Approval to Prescribe a Psychedelic', $margin, 802, 9);
-    $p3[] = pdfFillColor(0, 0, 0);
+    // ============================================================
+    // PAGE 4: Section 3 - Treatment Protocol
+    // ============================================================
+    $p4 = [];
 
-    $p3[] = pdfSectionHeader('Clinical Documentation', $margin, 762, $contentW, $tealR, $tealG, $tealB);
+    $p4[] = pdfFillColor($pR, $pG, $pB);
+    $p4[] = pdfBoldTextCommand('Section 3: Treatment Protocol', $margin, $yt(17.9, 18), 18);
+    $p4[] = pdfFillColor(0, 0, 0);
 
-    $docFields = [
-        ['Supporting Evidence', (string)($form['supporting_evidence_notes'] ?? '')],
-        ['Treatment Protocol', (string)($form['treatment_protocol_notes'] ?? '')],
-        ['Scientific Peer Review', (string)($form['scientific_peer_review_notes'] ?? '')],
-    ];
-    $docY = 740;
-    foreach ($docFields as $df) {
-        $p3[] = pdfFillColor($tealR, $tealG, $tealB);
-        $p3[] = pdfBoldTextCommand($df[0], $margin, $docY, 10);
-        $p3[] = pdfFillColor(0, 0, 0);
-        $docY -= 16;
-        $wrappedLines = pdfWordWrap($df[1], 80);
-        foreach ($wrappedLines as $wl) {
-            $p3[] = pdfTextCommand($wl, $margin + 4, $docY, 9);
-            $docY -= 14;
+    // 3.1 Indication
+    $p4[] = pdfTextCommand('3.1. What is the indication the product(s) are proposed to be used for?', $bodyMargin, $yt(64.5, 10), 10);
+    $p4[] = pdfRectCommand(47.83, $pageH - 177.17, 573.17 - 47.83, 177.17 - 83.84, false);
+    if ($indication !== '') {
+        $indLines = pdfWordWrap($indication, 90);
+        $indY = 95;
+        foreach ($indLines as $il) {
+            $p4[] = pdfTextCommand($il, 52, $yt($indY, 9), 9);
+            $indY += 12;
         }
-        $docY -= 6;
     }
 
-    $docY -= 10;
-    $p3[] = pdfSectionHeader('Signature', $margin, $docY, $contentW, $tealR, $tealG, $tealB);
-    $docY -= 22;
-    $sigMode = (string)($form['signature_mode'] ?? '');
+    // 3.2 Supporting evidence
+    $p4[] = pdfTextCommand('3.2. Provide supporting evidence/information to support use of the product(s) for the intended indication.', $bodyMargin, $yt(199.5, 10), 10);
+
+    // 3.3 Treatment protocol
+    $p4[] = pdfTextCommand('3.3. Provide a copy of the current treatment protocol.', $bodyMargin, $yt(235.5, 10), 10);
+
+    // Note accent bar
+    $p4[] = pdfFillColor(0.882, 0.882, 0.882);
+    $p4[] = pdfFilledRect(36.0, $pageH - 279.0, 540.0, 18.0);
+    $p4[] = pdfFillColor($pR, $pG, $pB);
+    $p4[] = pdfFilledRect(27.0, $pageH - 279.0, 9.0, 18.0);
+    $p4[] = pdfFillColor(0, 0, 0);
+
+    $p4[] = pdfBoldTextCommand('Note:', 37.4, $yt(263.1, 9), 9);
+    $p4[] = pdfTextCommand('Refer to the published guidance for details of the assessment criteria', 62.9, $yt(263.2, 9), 9);
+
+    // 3.4 Administering location
+    $p4[] = pdfTextCommand('3.4. Describe where you will be administering and monitoring the treatment:', $bodyMargin, $yt(307.5, 10), 10);
+
+    // Text box for evidence + protocol
+    $p4[] = pdfRectCommand(47.83, $pageH - 537.17, 573.17 - 47.83, 537.17 - 326.84, false);
+    $evText = (string)($form['supporting_evidence_notes'] ?? '');
+    $protText = (string)($form['treatment_protocol_notes'] ?? '');
+    $combinedText = '';
+    if ($evText !== '') {
+        $combinedText .= 'Supporting Evidence: ' . $evText;
+    }
+    if ($protText !== '') {
+        if ($combinedText !== '') {
+            $combinedText .= ' | ';
+        }
+        $combinedText .= 'Treatment Protocol: ' . $protText;
+    }
+    if ($combinedText !== '') {
+        $combLines = pdfWordWrap($combinedText, 90);
+        $combY = 340;
+        foreach ($combLines as $cl) {
+            if ($combY > 530) {
+                break;
+            }
+            $p4[] = pdfTextCommand($cl, 52, $yt($combY, 9), 9);
+            $combY += 12;
+        }
+    }
+
+    $p4[] = pdfMedsafeFooter(4, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+
+    // ============================================================
+    // PAGE 5: Section 4 - Scientific Peer Review
+    // ============================================================
+    $p5 = [];
+
+    $p5[] = pdfFillColor($pR, $pG, $pB);
+    $p5[] = pdfBoldTextCommand('Section 4: Scientific Peer Review', $margin, $yt(17.7, 18), 18);
+    $p5[] = pdfFillColor(0, 0, 0);
+
+    // 4.1 Question
+    $p5[] = pdfTextCommand('4.1. Describe the scientific peer review activities that are implemented/proposed, and details of any support networks:', $bodyMargin, $yt(64.5, 10), 10);
+
+    // Note accent bar
+    $p5[] = pdfFillColor(0.882, 0.882, 0.882);
+    $p5[] = pdfFilledRect(36.0, $pageH - 108.0, 540.0, 18.0);
+    $p5[] = pdfFillColor($pR, $pG, $pB);
+    $p5[] = pdfFilledRect(27.0, $pageH - 108.0, 9.0, 18.0);
+    $p5[] = pdfFillColor(0, 0, 0);
+
+    $p5[] = pdfBoldTextCommand('Note:', 37.4, $yt(92.1, 9), 9);
+    $p5[] = pdfTextCommand('Please provide any applicable supporting documentation, for example completed peer reviews.', 62.9, $yt(92.2, 9), 9);
+
+    // Large text box
+    $p5[] = pdfRectCommand(47.83, $pageH - 726.17, 573.17 - 47.83, 726.17 - 119.84, false);
+    $peerText = (string)($form['scientific_peer_review_notes'] ?? '');
+    if ($peerText !== '') {
+        $prLines = pdfWordWrap($peerText, 90);
+        $prY = 132;
+        foreach ($prLines as $pl) {
+            if ($prY > 718) {
+                break;
+            }
+            $p5[] = pdfTextCommand($pl, 52, $yt($prY, 9), 9);
+            $prY += 12;
+        }
+    }
+
+    $p5[] = pdfMedsafeFooter(5, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+
+    // ============================================================
+    // PAGE 6: Section 5 - Declaration & Signature
+    // ============================================================
+    $p6 = [];
+
+    $p6[] = pdfFillColor($pR, $pG, $pB);
+    $p6[] = pdfBoldTextCommand('Section 5: Declaration', $margin, $yt(17.8, 18), 18);
+    $p6[] = pdfFillColor(0, 0, 0);
+
+    // Declaration border box (purple outline)
+    $p6[] = pdfStrokeColor($pR, $pG, $pB);
+    $p6[] = '0.72 w';
+    $p6[] = pdfRectCommand(36.0, $pageH - 315.0, 540.0, 315.0 - 81.0, false);
+    $p6[] = pdfStrokeColor(0, 0, 0);
+    $p6[] = '0.50 w';
+
+    // 5.1 heading
+    $p6[] = pdfFillColor($pR, $pG, $pB);
+    $p6[] = pdfBoldTextCommand('5.1. Applicant declaration', $margin, $yt(55.3, 10), 10);
+    $p6[] = pdfFillColor(0, 0, 0);
+
+    // Declaration text
+    $p6[] = pdfTextCommand('I confirm that I:', 46.4, $yt(88.9, 10), 10);
+    $p6[] = pdfTextCommand('1. Solemnly and sincerely declare that the statements made in this Application are true and correct; and', 82.4, $yt(100.9, 10), 10);
+    $p6[] = pdfTextCommand('2. Agree to provide any further information as required by Medsafe to assess the application.', 82.4, $yt(112.9, 10), 10);
+
+    // Date field
+    $p6[] = pdfTextCommand('Date:', 47.8, $yt(150.5, 10), 10);
+    $dateVal = (string)($form['date'] ?? '');
+    $p6[] = pdfRectCommand(81.38, $pageH - 150.5 - 15.84, 231.17 - 81.38, 19.84, false);
+    if ($dateVal !== '') {
+        $p6[] = pdfTextCommand($dateVal, 85.38, $yt(153, 10), 10);
+    }
+
+    // Signature note bar
+    $p6[] = pdfFillColor(0.882, 0.882, 0.882);
+    $p6[] = pdfFilledRect(54.0, $pageH - 216.0, 513.0, 36.0);
+    $p6[] = pdfFillColor($pR, $pG, $pB);
+    $p6[] = pdfFilledRect(45.0, $pageH - 216.0, 9.0, 36.0);
+    $p6[] = pdfFillColor(0, 0, 0);
+
+    $p6[] = pdfBoldTextCommand('Note:', 55.4, $yt(180.3, 9), 9);
+    $p6[] = pdfTextCommand('To sign this document electronically apply a digital signature, or attach a signature image file, or use an on-screen signing', 80.9, $yt(180.4, 9), 9);
+    $p6[] = pdfTextCommand('function (for example \'Fill & Sign\' in Adobe Reader). If completing the signature electronically is not possible, print the form and', 55.4, $yt(191.2, 9), 9);
+    $p6[] = pdfTextCommand('sign in pen.', 55.4, $yt(202.0, 9), 9);
+
+    // Signature method labels
+    $p6[] = pdfBoldTextCommand('Digital Signature', 55.4, $yt(223.8, 10), 10);
+    $p6[] = pdfFillColor(0, 0, 0);
+    $p6[] = pdfBoldTextCommand('OR', 213.0, $yt(257.8, 10), 10);
+
+    $p6[] = pdfBoldTextCommand('Signature Image File', 235.4, $yt(223.8, 10), 10);
+    $p6[] = pdfBoldTextCommand('OR', 393.0, $yt(257.8, 10), 10);
+
+    $p6[] = pdfBoldTextCommand('Signature', 415.4, $yt(223.8, 10), 10);
+
+    // Signature boxes
     $sigDrawn = (string)($form['signature_drawn'] ?? '');
-    $sigUpload = (string)($form['signature_upload'] ?? 'Not uploaded');
-    $p3[] = pdfLabelValue('Signature Method', $sigMode !== '' ? ucfirst($sigMode) : 'Not specified', $margin, $docY);
-    $docY -= 20;
-    $p3[] = pdfLabelValue('Signature Drawn', $sigDrawn !== '' ? 'Provided' : 'Not provided', $margin, $docY);
-    $docY -= 20;
-    $p3[] = pdfLabelValue('Signature Upload', $sigUpload, $margin, $docY);
-    $docY -= 30;
+    $sigBoxY = $pageH - 306.0;  // PDF coords for bottom of signature box
+    $sigBoxH = 54.0;
 
-    // Signature image placeholder box
-    $sigBoxY = $docY - 70;
-    $p3[] = pdfStrokeColor(0.7, 0.7, 0.7);
-    $p3[] = '1.00 w';
-    $p3[] = pdfRectCommand($margin, $sigBoxY, 220, 70, false);
-    $p3[] = '0.50 w';
-    $p3[] = pdfStrokeColor(0, 0, 0);
-    if ($sigDrawn === '') {
-        $p3[] = pdfFillColor(0.6, 0.6, 0.6);
-        $p3[] = pdfTextCommand('Signature area', $margin + 60, $sigBoxY + 30, 9);
-        $p3[] = pdfFillColor(0, 0, 0);
+    // Digital signature box (left) - navy blue per reference
+    $p6[] = pdfStrokeColor(0, 0, 0.502);
+    $p6[] = pdfRectCommand(54.0, $sigBoxY, 153.0, $sigBoxH, false);
+
+    // Signature image file box (middle) - navy blue per reference
+    $p6[] = pdfRectCommand(234.0, $sigBoxY, 153.0, $sigBoxH, false);
+
+    // Signature box (right) - black per reference
+    $p6[] = pdfStrokeColor(0, 0, 0);
+    $p6[] = pdfRectCommand(414.0, $sigBoxY, 153.0, $sigBoxH, false);
+
+    if ($sigDrawn !== '') {
+        $p6[] = pdfFillColor(0, 0, 0);
+        $p6[] = pdfTextCommand('[Signature provided]', 420, $sigBoxY + 20, 9);
     }
 
-    $declY = $sigBoxY - 30;
-    $p3[] = pdfFillColor(0.95, 0.95, 0.95);
-    $p3[] = pdfFilledRect($margin, $declY - 10, $contentW, 28);
-    $p3[] = pdfFillColor(0.2, 0.2, 0.2);
-    $p3[] = pdfTextCommand('Declaration: All submitted fields have been included in this PDF export.', $margin + 8, $declY, 9);
-    $p3[] = pdfFillColor(0, 0, 0);
+    $p6[] = pdfFillColor(0, 0, 0);
+    $p6[] = pdfMedsafeFooter(6, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
 
-    $p3[] = pdfPageFooter(3, 3, $pageW, $tealR, $tealG, $tealB);
+    // Build streams
+    $streams = [];
+    $streams[] = buildPdfPageStream([], $p1);
+    $streams[] = buildPdfPageStream([], $p2);
+    $streams[] = buildPdfPageStream([], $p3);
+    $streams[] = buildPdfPageStream([], $p4);
+    $streams[] = buildPdfPageStream([], $p5);
+    $streams[] = buildPdfPageStream([], $p6);
 
-    $stream1 = buildPdfPageStream([], $p1);
-    $stream2 = buildPdfPageStream([], $p2);
-    $stream3 = buildPdfPageStream([], $p3);
-
-    return writeSimpleThreePagePdf($path, $stream1, $stream2, $stream3, (string)($form['signature_drawn'] ?? ''), $sigBoxY);
+    return writeMultiPagePdf($path, $streams, $sigDrawn, $sigBoxY);
 }
 
 function buildSubmissionProductRows(array $submission): array
@@ -816,29 +1126,50 @@ function buildSubmissionProductRows(array $submission): array
     return $rows;
 }
 
-function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y): bool
+function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y): bool
 {
+    $pageCount = count($streams);
     $fontRes = '<< /F1 6 0 R /F2 10 0 R >>';
     $objects = [];
     $objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
-    $objects[2] = '<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>';
-    $objects[3] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' >> /Contents 7 0 R >>';
-    $objects[4] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' >> /Contents 8 0 R >>';
-    $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' >> /Contents 9 0 R >>';
-    $objects[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
-    $objects[10] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>';
 
-    $signatureImage = buildSignatureJpegObjectFromDataUrl($signatureDrawn);
-    if ($signatureImage) {
-        $imageObjNum = 11;
-        $objects[$imageObjNum] = $signatureImage['object'];
-        $stream3 .= "\nq\n220 0 0 70 50 " . number_format($sigBoxY, 2, '.', '') . " cm\n/SigIm Do\nQ\n";
-        $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font ' . $fontRes . ' /XObject << /SigIm ' . $imageObjNum . ' 0 R >> >> /Contents 9 0 R >>';
+    // Page object IDs start at 3
+    $pageObjIds = [];
+    for ($i = 0; $i < $pageCount; $i++) {
+        $pageObjIds[] = 3 + $i;
+    }
+    $kidsStr = implode(' ', array_map(fn($id) => $id . ' 0 R', $pageObjIds));
+    $objects[2] = '<< /Type /Pages /Kids [' . $kidsStr . '] /Count ' . $pageCount . ' >>';
+
+    // Font objects – use IDs after pages
+    $fontObjBase = 3 + $pageCount;
+    $fontRegularId = $fontObjBase;
+    $fontBoldId = $fontObjBase + 1;
+    $objects[$fontRegularId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    $objects[$fontBoldId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    $fontResStr = '<< /F1 ' . $fontRegularId . ' 0 R /F2 ' . $fontBoldId . ' 0 R >>';
+
+    // Stream object IDs start after fonts
+    $streamObjBase = $fontObjBase + 2;
+    for ($i = 0; $i < $pageCount; $i++) {
+        $streamId = $streamObjBase + $i;
+        $pageId = $pageObjIds[$i];
+        $objects[$pageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font ' . $fontResStr . ' >> /Contents ' . $streamId . ' 0 R >>';
+        $objects[$streamId] = "<< /Length " . strlen($streams[$i]) . " >>\nstream\n" . $streams[$i] . "\nendstream";
     }
 
-    $objects[7] = "<< /Length " . strlen($stream1) . " >>\nstream\n" . $stream1 . "\nendstream";
-    $objects[8] = "<< /Length " . strlen($stream2) . " >>\nstream\n" . $stream2 . "\nendstream";
-    $objects[9] = "<< /Length " . strlen($stream3) . " >>\nstream\n" . $stream3 . "\nendstream";
+    // Signature image on last page
+    $signatureImage = buildSignatureJpegObjectFromDataUrl($signatureDrawn);
+    if ($signatureImage) {
+        $imageObjNum = $streamObjBase + $pageCount;
+        $objects[$imageObjNum] = $signatureImage['object'];
+        $lastStreamIdx = $pageCount - 1;
+        $lastStreamId = $streamObjBase + $lastStreamIdx;
+        $lastPageId = $pageObjIds[$lastStreamIdx];
+        $streams[$lastStreamIdx] .= "\nq\n153 0 0 54 414 " . number_format($sigBoxY, 2, '.', '') . " cm\n/SigIm Do\nQ\n";
+        $objects[$lastStreamId] = "<< /Length " . strlen($streams[$lastStreamIdx]) . " >>\nstream\n" . $streams[$lastStreamIdx] . "\nendstream";
+        $objects[$lastPageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font ' . $fontResStr . ' /XObject << /SigIm ' . $imageObjNum . ' 0 R >> >> /Contents ' . $lastStreamId . ' 0 R >>';
+    }
 
     $pdf = buildPdfFromObjects($objects, 1);
     return file_put_contents($path, $pdf) !== false;
@@ -911,6 +1242,22 @@ function buildPdfPageStream(array $lines, array $extraCommands): string
 ";
 }
 
+/**
+ * Convert a reference-PDF top-of-text Y coordinate to a PDF baseline Y.
+ *
+ * PyMuPDF/reference positions report the bbox top (from page top).
+ * PDF text commands need the baseline Y (from page bottom).
+ * For Helvetica Type1 with WinAnsiEncoding the effective ascent that
+ * positions the bbox top correctly is approximately 1.07 × fontSize.
+ * This factor was determined empirically by comparing rendered glyph
+ * positions with reference PDF coordinates across multiple font sizes
+ * (8–26 pt) and matches to within 0.1 pt.
+ */
+function pdfYFromTop(float $topFromTop, float $fontSize, float $pageHeight = 841.89): float
+{
+    return $pageHeight - $topFromTop - $fontSize * 1.07;
+}
+
 function pdfTextCommand(string $text, float $x, float $y, float $size = 10): string
 {
     return 'BT /F1 ' . number_format($size, 2, '.', '') . ' Tf 1 0 0 1 ' . number_format($x, 2, '.', '') . ' ' . number_format($y, 2, '.', '') . ' Tm (' . pdfEscape($text) . ') Tj ET';
@@ -953,10 +1300,10 @@ function pdfLineCommand(float $x1, float $y1, float $x2, float $y2): string
     return number_format($x1, 2, '.', '') . ' ' . number_format($y1, 2, '.', '') . ' m ' . number_format($x2, 2, '.', '') . ' ' . number_format($y2, 2, '.', '') . ' l S';
 }
 
-function pdfSectionHeader(string $title, float $x, float $y, float $width, float $r = MEDSAFE_TEAL_R, float $g = MEDSAFE_TEAL_G, float $b = MEDSAFE_TEAL_B): string
+function pdfSectionHeader(string $title, float $x, float $y, float $width, float $r = MEDSAFE_PURPLE_R, float $g = MEDSAFE_PURPLE_G, float $b = MEDSAFE_PURPLE_B): string
 {
     $commands = [];
-    $commands[] = pdfFillColor(0.92, 0.96, 0.95);
+    $commands[] = pdfFillColor(0.882, 0.882, 0.882);
     $commands[] = pdfFilledRect($x, $y - 6, $width, 20);
     $commands[] = pdfFillColor($r, $g, $b);
     $commands[] = pdfFilledRect($x, $y - 6, 3, 20);
@@ -975,14 +1322,23 @@ function pdfLabelValue(string $label, string $value, float $x, float $y): string
     return implode("\n", $commands);
 }
 
-function pdfPageFooter(int $pageNum, int $totalPages, float $pageWidth, float $r = MEDSAFE_TEAL_R, float $g = MEDSAFE_TEAL_G, float $b = MEDSAFE_TEAL_B): string
+function pdfPageFooter(int $pageNum, int $totalPages, float $pageWidth, float $r = MEDSAFE_PURPLE_R, float $g = MEDSAFE_PURPLE_G, float $b = MEDSAFE_PURPLE_B): string
+{
+    return pdfMedsafeFooter($pageNum, $totalPages, $pageWidth, 841.89, $r, $g, $b);
+}
+
+function pdfMedsafeFooter(int $pageNum, int $totalPages, float $pageWidth, float $pageHeight, float $r = MEDSAFE_PURPLE_R, float $g = MEDSAFE_PURPLE_G, float $b = MEDSAFE_PURPLE_B): string
 {
     $commands = [];
+    $footerText = 'Application Form: Approval to Prescribe/Supply/Administer (Form A3) version 1.0';
+    $pageText = 'Page ' . $pageNum . ' of ' . $totalPages;
+    // Reference: footer text at bbox_top=816.6 (8pt font)
+    $footerY = pdfYFromTop(816.6, 8, $pageHeight);
+    // Reference: page number at bbox_top=818.0 (8pt font)
+    $pageNumY = pdfYFromTop(818.0, 8, $pageHeight);
     $commands[] = pdfFillColor($r, $g, $b);
-    $commands[] = pdfFilledRect(0, 40, $pageWidth, 1);
-    $commands[] = pdfFillColor(0.4, 0.4, 0.4);
-    $commands[] = pdfTextCommand('Medsafe - New Zealand Medicines and Medical Devices Safety Authority', 50, 26, 7);
-    $commands[] = pdfTextCommand('Page ' . $pageNum . ' of ' . $totalPages, $pageWidth - 100, 26, 8);
+    $commands[] = pdfTextCommand($footerText, 19.4, $footerY, 8);
+    $commands[] = pdfTextCommand($pageText, $pageWidth - 60, $pageNumY, 8);
     $commands[] = pdfFillColor(0, 0, 0);
     return implode("\n", $commands);
 }
