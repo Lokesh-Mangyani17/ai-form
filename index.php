@@ -17,7 +17,12 @@ $doctor = getDoctorProfile();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'save_submission') {
-        [$ok, $message, $error] = saveSubmission($doctor, $_POST, $_FILES);
+        [$ok, $message, $error, $submissionId] = saveSubmission($doctor, $_POST, $_FILES);
+        if ($ok && $submissionId) {
+            $_SESSION['form_success'] = $message;
+            header('Location: ?page=form&submitted=1&id=' . urlencode($submissionId));
+            exit;
+        }
     }
 
     if ($action === 'save_product' && isAdmin() && !isWordPressRuntime()) {
@@ -46,6 +51,13 @@ if ($action === 'download_support') {
 $doctorPrefs = getDoctorPrefs((int)$doctor['id']);
 $products = getProducts();
 $submissions = getSubmissions();
+$submissionView = null;
+if (($page === 'form') && ($_GET['submitted'] ?? '') === '1') {
+    $submissionView = findSubmission($_GET['id'] ?? '');
+    if (!$submissionView) {
+        $error = 'Submitted record not found. Please try again.';
+    }
+}
 
 function isWordPressRuntime(): bool
 {
@@ -294,7 +306,17 @@ function saveSubmission(array $doctor, array $post, array $files): array
 {
     $selectedProducts = array_values(array_filter($post['products'] ?? []));
     if (empty($selectedProducts)) {
-        return [false, null, 'Please select at least one product.'];
+        return [false, null, 'Please select at least one product.', null];
+    }
+
+    if (trim((string)($post['vocational_scope'] ?? '')) === '') {
+        return [false, null, 'Vocational Scope is required.', null];
+    }
+    if (trim((string)($post['clinical_experience'] ?? '')) === '') {
+        return [false, null, 'Clinical Experience & Training is required.', null];
+    }
+    if (trim((string)($post['application_date'] ?? '')) === '') {
+        return [false, null, 'Application date is required.', null];
     }
 
     $signatureDrawn = trim($post['signature_drawn'] ?? '');
@@ -309,19 +331,19 @@ function saveSubmission(array $doctor, array $post, array $files): array
     }
 
     if ($signatureMode === 'draw' && $signatureDrawn === '') {
-        return [false, null, 'Please provide a drawn signature.'];
+        return [false, null, 'Please provide a drawn signature.', null];
     }
     if ($signatureMode === 'upload' && !$signatureUploadPath) {
-        return [false, null, 'Please upload a signature image.'];
+        return [false, null, 'Please upload a signature image.', null];
     }
 
     $indication = trim($post['indication'] ?? '');
     $indicationOther = trim($post['indication_other'] ?? '');
     if ($indication === '') {
-        return [false, null, 'Please select an indication.'];
+        return [false, null, 'Please select an indication.', null];
     }
     if ($indication === 'Other' && $indicationOther === '') {
-        return [false, null, 'Please enter a custom indication.'];
+        return [false, null, 'Please enter a custom indication.', null];
     }
 
     saveDoctorPrefs((int)$doctor['id'], $post);
@@ -366,7 +388,7 @@ function saveSubmission(array $doctor, array $post, array $files): array
 
     file_put_contents(SUBMISSIONS_DIR . '/' . $id . '.json', json_encode($submission, JSON_PRETTY_PRINT));
 
-    return [true, 'Submission saved and PDF generated successfully.', null];
+    return [true, 'Submission saved and PDF generated successfully.', null, $id];
 }
 
 function createTextPdf(array $submission, string $path): void
@@ -525,12 +547,12 @@ function emailPdfToDoctor(string $submissionId): array
 <div class="container">
   <header class="topbar">
     <h1>Prescription Form Development</h1>
-    <nav>
-      <a href="?page=form">Doctor Form</a>
-      <a href="?page=admin">Admin</a>
-    </nav>
   </header>
 
+  <?php if (!empty($_SESSION['form_success'])): ?>
+    <div class="alert success"><?= htmlspecialchars($_SESSION['form_success']) ?></div>
+    <?php unset($_SESSION['form_success']); ?>
+  <?php endif; ?>
   <?php if ($message): ?><div class="alert success"><?= htmlspecialchars($message) ?></div><?php endif; ?>
   <?php if ($error): ?><div class="alert error"><?= htmlspecialchars($error) ?></div><?php endif; ?>
 
@@ -585,7 +607,17 @@ function emailPdfToDoctor(string $submissionId): array
     </section>
 
   <?php else: ?>
-    <form id="prescriptionForm" class="card form-shell" method="post" enctype="multipart/form-data" action="?page=form&action=save_submission">
+    <?php if ($submissionView): ?>
+      <section class="card thank-you">
+        <h2>Thank you! Your application has been submitted.</h2>
+        <p>Your PDF has been generated and is ready for download.</p>
+        <div class="thank-actions">
+          <a class="btn-link" href="?action=download_pdf&id=<?= urlencode($submissionView['id']) ?>">Download PDF</a>
+          <a class="btn-link ghost" href="?page=form">Create another submission</a>
+        </div>
+      </section>
+    <?php else: ?>
+    <form id="prescriptionForm" class="card form-shell" method="post" enctype="multipart/form-data" action="?page=form&action=save_submission" novalidate>
       <div class="steps"><span class="active">1</span><span>2</span><span>3</span></div>
       <div class="step-labels"><span>Applicant Details</span><span>Clinical Details</span><span>Sign & Submit</span></div>
 
@@ -721,6 +753,7 @@ function emailPdfToDoctor(string $submissionId): array
         <button type="submit" id="submitBtn" class="hidden">Submit & Generate PDF</button>
       </div>
     </form>
+    <?php endif; ?>
   <?php endif; ?>
 </div>
 <script>
@@ -825,8 +858,40 @@ if (productWrap) {
   productWrap.addEventListener('change', syncProductAuto);
   syncProductAuto();
 }
-if (indicationSelect) {
-  indicationSelect.addEventListener('change', syncIndicationAuto);
+if (submitBtn) {
+  submitBtn.addEventListener('click', (e) => {
+    const errors = [];
+    const selectedProducts = document.querySelectorAll('.product-check:checked').length;
+    const vocational = document.querySelector('textarea[name="vocational_scope"]')?.value.trim();
+    const experience = document.querySelector('textarea[name="clinical_experience"]')?.value.trim();
+    const date = document.querySelector('input[name="application_date"]')?.value.trim();
+    const indication = indicationSelect ? indicationSelect.value : '';
+    const mode = document.querySelector('input[name="signature_mode"]:checked')?.value || '';
+    const drawn = document.getElementById('signatureDrawn')?.value || '';
+    const uploadFile = document.querySelector('input[name="signature_upload"]')?.files?.length || 0;
+
+    if (!vocational) errors.push('Vocational Scope is required.');
+    if (!experience) errors.push('Clinical Experience & Training is required.');
+    if (!selectedProducts) errors.push('Please select at least one product.');
+    if (!indication) errors.push('Please select an indication.');
+    if (indication === 'Other' && !document.getElementById('indicationOtherInput')?.value.trim()) errors.push('Please enter a custom indication.');
+    if (!date) errors.push('Application date is required.');
+    if (mode === 'draw' && !drawn) errors.push('Please provide a drawn signature.');
+    if (mode === 'upload' && !uploadFile) errors.push('Please upload a signature image.');
+
+    if (errors.length) {
+      e.preventDefault();
+      const box = document.createElement('div');
+      box.className = 'alert error';
+      box.innerHTML = errors.map(msg => `<div>• ${msg}</div>`).join('');
+      const form = document.getElementById('prescriptionForm');
+      const existing = form.querySelector('.client-errors');
+      if (existing) existing.remove();
+      box.classList.add('client-errors');
+      form.prepend(box);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  });
 }
 
 const drawWrap = document.getElementById('drawWrap');

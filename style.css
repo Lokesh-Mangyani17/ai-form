@@ -202,3 +202,21 @@ tbody td { border-bottom: 1px solid #e2e8f0; padding: 10px; vertical-align: top;
   background: #fff;
 }
 .product-item input { margin: 0; }
+
+
+.thank-you h2 { margin-top: 0; }
+.thank-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.btn-link {
+  display: inline-block;
+  padding: 10px 14px;
+  border-radius: 10px;
+  color: #fff;
+  background: linear-gradient(90deg, var(--primary), var(--primary-dark));
+  text-decoration: none;
+  font-weight: 600;
+}
+.btn-link.ghost {
+  background: #fff;
+  color: var(--primary-dark);
+  border: 1px solid #c7d2fe;
+}
