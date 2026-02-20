@@ -468,13 +468,6 @@ function saveSubmission(array $doctor, array $post, array $files): array
         ],
     ];
 
-    if (!empty($files['peer_support_doc']['name'])) {
-        $safeName = uniqid('support_') . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $files['peer_support_doc']['name']);
-        $target = SUBMISSIONS_DIR . '/' . $safeName;
-        move_uploaded_file($files['peer_support_doc']['tmp_name'], $target);
-        $submission['form']['peer_support_file'] = $safeName;
-    }
-
     $pdfPath = SUBMISSIONS_DIR . '/' . $id . '.pdf';
     [$pdfOk, $pdfError] = createRegulatorPdf($submission, $pdfPath);
     if (!$pdfOk) {
@@ -578,18 +571,17 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         ['Supporting Evidence: ' . (string)($form['supporting_evidence_notes'] ?? ''), 36, 778, 10],
         ['Treatment Protocol: ' . (string)($form['treatment_protocol_notes'] ?? ''), 36, 754, 10],
         ['Scientific Peer Review: ' . (string)($form['scientific_peer_review_notes'] ?? ''), 36, 730, 10],
-        ['Support File: ' . (string)($form['peer_support_file'] ?? 'Not uploaded'), 36, 706, 10],
-        ['Signature Mode: ' . (string)($form['signature_mode'] ?? ''), 36, 682, 10],
-        ['Signature Drawn: ' . ((string)($form['signature_drawn'] ?? '') !== '' ? 'Provided' : 'Not provided'), 36, 668, 10],
-        ['Signature Upload: ' . (string)($form['signature_upload'] ?? 'Not uploaded'), 36, 654, 10],
-        ['Declaration: All submitted fields have been included in this PDF export.', 36, 620, 10],
+                ['Signature Mode: ' . (string)($form['signature_mode'] ?? ''), 36, 706, 10],
+        ['Signature Drawn: ' . ((string)($form['signature_drawn'] ?? '') !== '' ? 'Provided' : 'Not provided'), 36, 692, 10],
+        ['Signature Upload: ' . (string)($form['signature_upload'] ?? 'Not uploaded'), 36, 678, 10],
+        ['Declaration: All submitted fields have been included in this PDF export.', 36, 644, 10],
     ];
 
     $stream1 = buildPdfPageStream($page1Lines, []);
     $stream2 = buildPdfPageStream([], $page2Commands);
     $stream3 = buildPdfPageStream($page3Lines, []);
 
-    return writeSimpleThreePagePdf($path, $stream1, $stream2, $stream3);
+    return writeSimpleThreePagePdf($path, $stream1, $stream2, $stream3, (string)($form['signature_drawn'] ?? ''));
 }
 
 function buildSubmissionProductRows(array $submission): array
@@ -633,7 +625,7 @@ function buildSubmissionProductRows(array $submission): array
     return $rows;
 }
 
-function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3): bool
+function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3, string $signatureDrawn = ''): bool
 {
     $objects = [];
     $objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
@@ -642,6 +634,20 @@ function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2,
     $objects[4] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 8 0 R >>';
     $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 9 0 R >>';
     $objects[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+
+    $signatureImage = buildSignatureJpegObjectFromDataUrl($signatureDrawn);
+    if ($signatureImage) {
+        $imageObjNum = 10;
+        $objects[$imageObjNum] = $signatureImage['object'];
+        $stream3 .= "
+q
+220 0 0 70 36 548 cm
+/SigIm Do
+Q
+";
+        $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> /XObject << /SigIm ' . $imageObjNum . ' 0 R >> >> /Contents 9 0 R >>';
+    }
+
     $objects[7] = "<< /Length " . strlen($stream1) . " >>
 stream
 " . $stream1 . "
@@ -657,6 +663,54 @@ endstream";
 
     $pdf = buildPdfFromObjects($objects, 1);
     return file_put_contents($path, $pdf) !== false;
+}
+
+function buildSignatureJpegObjectFromDataUrl(string $dataUrl): ?array
+{
+    if ($dataUrl === '' || !str_starts_with($dataUrl, 'data:image/')) {
+        return null;
+    }
+    $parts = explode(',', $dataUrl, 2);
+    if (count($parts) !== 2) {
+        return null;
+    }
+
+    $meta = strtolower($parts[0]);
+    $binary = base64_decode($parts[1], true);
+    if ($binary === false || $binary === '') {
+        return null;
+    }
+
+    $size = function_exists('getimagesizefromstring') ? @getimagesizefromstring($binary) : false;
+    $w = (int)($size[0] ?? 0);
+    $h = (int)($size[1] ?? 0);
+
+    $jpg = '';
+    if (str_contains($meta, 'image/jpeg') || str_contains($meta, 'image/jpg')) {
+        $jpg = $binary;
+    } elseif (function_exists('imagecreatefromstring') && function_exists('imagejpeg')) {
+        $img = @imagecreatefromstring($binary);
+        if ($img) {
+            if ($w < 1 || $h < 1) {
+                $w = imagesx($img);
+                $h = imagesy($img);
+            }
+            ob_start();
+            imagejpeg($img, null, 85);
+            $jpg = (string)ob_get_clean();
+            imagedestroy($img);
+        }
+    }
+
+    if ($jpg === '' || $w < 1 || $h < 1) {
+        return null;
+    }
+
+    $object = '<< /Type /XObject /Subtype /Image /Width ' . $w . ' /Height ' . $h . ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen($jpg) . " >>
+stream
+" . $jpg . "
+endstream";
+    return ['object' => $object];
 }
 
 function buildPdfPageStream(array $lines, array $extraCommands): string
@@ -975,8 +1029,7 @@ function emailPdfToDoctor(string $submissionId): array
             <textarea id="formAuto" readonly></textarea>
           </label>
           <label>Sourced from
-            <textarea id="sourcingAuto" readonly></textarea>
-            <textarea name="sourcing_notes" placeholder="Add/amend sourcing notes"></textarea>
+            <textarea id="sourcingAuto" name="sourcing_notes"></textarea>
           </label>
         </div>
 
@@ -990,23 +1043,17 @@ function emailPdfToDoctor(string $submissionId): array
         </label>
 
         <label>Supporting Evidence
-          <textarea id="supportingEvidenceAuto" readonly></textarea>
-          <textarea name="supporting_evidence_notes" placeholder="Add/amend supporting evidence notes"></textarea>
+          <textarea id="supportingEvidenceAuto" name="supporting_evidence_notes"></textarea>
         </label>
 
         <label>Treatment Protocol
-          <textarea id="treatmentProtocolAuto" readonly></textarea>
-          <textarea name="treatment_protocol_notes" placeholder="Add/amend treatment protocol notes"></textarea>
+          <textarea id="treatmentProtocolAuto" name="treatment_protocol_notes"></textarea>
         </label>
 
         <label>Scientific Peer Review
-          <textarea id="peerReviewAuto" readonly></textarea>
-          <textarea name="scientific_peer_review_notes" placeholder="Add/amend scientific peer review notes"></textarea>
+          <textarea id="peerReviewAuto" name="scientific_peer_review_notes"></textarea>
         </label>
 
-        <label>Upload peer review support document
-          <input type="file" name="peer_support_doc" />
-        </label>
       </section>
 
       <section class="step" data-step="3" style="display:none;">
@@ -1209,7 +1256,7 @@ if (canvas) {
 
   const start = e => { drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
   const move = e => { if (!drawing) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); };
-  const stop = () => { drawing = false; document.getElementById('signatureDrawn').value = canvas.toDataURL('image/png'); };
+  const stop = () => { drawing = false; document.getElementById('signatureDrawn').value = canvas.toDataURL('image/jpeg', 0.9); };
 
   canvas.addEventListener('mousedown', start);
   canvas.addEventListener('mousemove', move);
