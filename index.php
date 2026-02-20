@@ -411,8 +411,10 @@ function saveSubmission(array $doctor, array $post, array $files): array
 function createRegulatorPdf(array $submission, string $path): void
 {
     if (file_exists(PDF_TEMPLATE_FILE)) {
-        copy(PDF_TEMPLATE_FILE, $path);
-        return;
+        $ok = fillTemplatePdfFields(PDF_TEMPLATE_FILE, $path, buildPdfFieldValueMap($submission));
+        if ($ok) {
+            return;
+        }
     }
 
     $lines = [];
@@ -467,6 +469,174 @@ function createRegulatorPdf(array $submission, string $path): void
     $pdf .= "trailer << /Size 6 /Root 1 0 R >>\nstartxref\n$xrefPos\n%%EOF";
 
     file_put_contents($path, $pdf);
+}
+
+function buildPdfFieldValueMap(array $submission): array
+{
+    $indication = trim(($submission['form']['indication'] ?? '') . ' ' . ($submission['form']['indication_other'] ?? ''));
+    $products = implode(', ', $submission['form']['product_names'] ?? []);
+
+    return [
+        'name' => $submission['doctor']['name'] ?? '',
+        'email' => $submission['doctor']['email'] ?? '',
+        'phone' => $submission['doctor']['phone'] ?? '',
+        'cpn' => $submission['doctor']['cpn'] ?? '',
+        'vocational_scope' => $submission['form']['vocational_scope'] ?? '',
+        'clinical_experience' => $submission['form']['clinical_experience'] ?? '',
+        'products' => $products,
+        'indication' => $indication,
+        'source' => $submission['form']['sourcing_notes'] ?? '',
+        'supporting_evidence' => $submission['form']['supporting_evidence_notes'] ?? '',
+        'treatment_protocol' => $submission['form']['treatment_protocol_notes'] ?? '',
+        'scientific_peer_review' => $submission['form']['scientific_peer_review_notes'] ?? '',
+        'date' => $submission['form']['date'] ?? '',
+    ];
+}
+
+function fillTemplatePdfFields(string $templatePath, string $outputPath, array $values): bool
+{
+    $pdf = @file_get_contents($templatePath);
+    if (!$pdf || !str_contains($pdf, '/AcroForm')) {
+        return false;
+    }
+
+    preg_match_all('/(\d+)\s+0\s+obj\b(.*?)endobj/s', $pdf, $allObjs, PREG_SET_ORDER);
+    if (empty($allObjs)) {
+        return false;
+    }
+
+    $objects = [];
+    $maxObject = 0;
+    foreach ($allObjs as $obj) {
+        $num = (int)$obj[1];
+        $objects[$num] = $obj[2];
+        $maxObject = max($maxObject, $num);
+    }
+
+    preg_match('/startxref\s*(\d+)\s*%%EOF/s', $pdf, $xrefMatch);
+    $prevXref = isset($xrefMatch[1]) ? (int)$xrefMatch[1] : null;
+    preg_match('/trailer\s*<<.*?\/Root\s+(\d+\s+\d+\s+R).*?>>/s', $pdf, $rootMatch);
+    $rootRef = $rootMatch[1] ?? '1 0 R';
+
+    $updates = [];
+    foreach ($objects as $num => $content) {
+        if (!preg_match('/\/T\s*\((.*?)\)/s', $content, $nameMatch)) {
+            continue;
+        }
+        if (!preg_match('/\/FT\s*\/Tx/', $content)) {
+            continue;
+        }
+
+        $fieldName = decodePdfString($nameMatch[1]);
+        $fieldValue = resolveFieldValue($fieldName, $values);
+        if ($fieldValue === null) {
+            continue;
+        }
+
+        $escaped = encodePdfString($fieldValue);
+        $newContent = preg_replace('/\/V\s*\((?:\\.|[^\\)])*\)/s', '', $content);
+        $newContent = preg_replace('/\/DV\s*\((?:\\.|[^\\)])*\)/s', '', $newContent);
+        $newContent = preg_replace('/>>\s*$/s', '/V (' . $escaped . ') /DV (' . $escaped . ') >>', trim($newContent));
+        $updates[$num] = $newContent;
+    }
+
+    if (empty($updates)) {
+        return false;
+    }
+
+    $append = "\n";
+    $offsets = [];
+    ksort($updates);
+    foreach ($updates as $num => $content) {
+        $offsets[$num] = strlen($pdf . $append);
+        $append .= $num . " 0 obj\n" . trim($content) . "\nendobj\n";
+    }
+
+    $xrefPos = strlen($pdf . $append);
+    $append .= "xref\n";
+
+    $groups = [];
+    $nums = array_keys($offsets);
+    sort($nums);
+    $start = null;
+    $last = null;
+    foreach ($nums as $num) {
+        if ($start === null) {
+            $start = $last = $num;
+            continue;
+        }
+        if ($num === $last + 1) {
+            $last = $num;
+            continue;
+        }
+        $groups[] = [$start, $last];
+        $start = $last = $num;
+    }
+    if ($start !== null) {
+        $groups[] = [$start, $last];
+    }
+
+    foreach ($groups as [$gStart, $gEnd]) {
+        $append .= $gStart . ' ' . ($gEnd - $gStart + 1) . "\n";
+        for ($i = $gStart; $i <= $gEnd; $i++) {
+            $append .= sprintf("%010d 00000 n \n", $offsets[$i]);
+        }
+    }
+
+    $append .= 'trailer << /Size ' . ($maxObject + 1) . ' /Root ' . $rootRef;
+    if ($prevXref !== null) {
+        $append .= ' /Prev ' . $prevXref;
+    }
+    $append .= " >>\nstartxref\n" . $xrefPos . "\n%%EOF";
+
+    return file_put_contents($outputPath, $pdf . $append) !== false;
+}
+
+function resolveFieldValue(string $fieldName, array $values): ?string
+{
+    $n = strtolower(preg_replace('/[^a-z0-9]+/', '_', $fieldName));
+    $map = [
+        'name' => ['applicant_name', 'name'],
+        'email' => ['email'],
+        'phone' => ['phone', 'telephone', 'mobile'],
+        'cpn' => ['cpn'],
+        'vocational_scope' => ['vocational_scope', 'scope'],
+        'clinical_experience' => ['clinical_experience', 'experience', 'training'],
+        'products' => ['product', 'medicine', 'drug'],
+        'indication' => ['indication', 'condition'],
+        'source' => ['source', 'sourced_from', 'supplier'],
+        'supporting_evidence' => ['supporting_evidence', 'evidence'],
+        'treatment_protocol' => ['treatment_protocol', 'protocol'],
+        'scientific_peer_review' => ['scientific_peer_review', 'peer_review'],
+        'date' => ['date'],
+    ];
+
+    foreach ($map as $key => $tokens) {
+        foreach ($tokens as $token) {
+            if (str_contains($n, $token) && isset($values[$key])) {
+                return (string)$values[$key];
+            }
+        }
+    }
+
+    static $fallbackIndex = 0;
+    $fallbackKeys = array_keys($values);
+    if (isset($fallbackKeys[$fallbackIndex])) {
+        $k = $fallbackKeys[$fallbackIndex++];
+        return (string)$values[$k];
+    }
+
+    return '';
+}
+
+function decodePdfString(string $s): string
+{
+    return str_replace(['\\(', '\\)', '\\\\'], ['(', ')', '\\'], $s);
+}
+
+function encodePdfString(string $s): string
+{
+    return str_replace(['\\', '(', ')', "\r", "\n"], ['\\\\', '\\(', '\\)', ' ', ' '], $s);
 }
 
 function findSubmission(string $id): ?array
