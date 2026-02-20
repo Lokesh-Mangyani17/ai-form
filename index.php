@@ -418,17 +418,12 @@ function createRegulatorPdf(array $submission, string $path): array
     }
 
     $valueMap = buildPdfFieldValueMap($submission);
-    $ok = fillTemplatePdfFields(PDF_TEMPLATE_FILE, $path, $valueMap);
+    $ok = createTemplateWithSupplementPagesPdf(PDF_TEMPLATE_FILE, $path, $valueMap);
     if ($ok) {
         return [true, null];
     }
 
-    $overlayOk = overlayValuesOnTemplatePdf(PDF_TEMPLATE_FILE, $path, $valueMap);
-    if ($overlayOk) {
-        return [true, null];
-    }
-
-    return [false, 'Unable to write form fields into the Medsafe PDF template.'];
+    return [false, 'Unable to generate Medsafe PDF pages from template.'];
 }
 
 function buildPdfFieldValueMap(array $submission): array
@@ -450,10 +445,11 @@ function buildPdfFieldValueMap(array $submission): array
         'treatment_protocol' => $submission['form']['treatment_protocol_notes'] ?? '',
         'scientific_peer_review' => $submission['form']['scientific_peer_review_notes'] ?? '',
         'date' => $submission['form']['date'] ?? '',
+        'signature_mode' => $submission['form']['signature_mode'] ?? '',
     ];
 }
 
-function overlayValuesOnTemplatePdf(string $templatePath, string $outputPath, array $values): bool
+function createTemplateWithSupplementPagesPdf(string $templatePath, string $outputPath, array $values): bool
 {
     $pdf = @file_get_contents($templatePath);
     if (!$pdf) {
@@ -473,92 +469,133 @@ function overlayValuesOnTemplatePdf(string $templatePath, string $outputPath, ar
         $maxObject = max($maxObject, $num);
     }
 
-    $pageNum = 0;
-    foreach ($objects as $num => $content) {
-        if (preg_match('/\/Type\s*\/Page\b/', $content)) {
-            $pageNum = $num;
-            break;
-        }
-    }
-    if ($pageNum === 0) {
-        return false;
-    }
-
-    $pageObj = $objects[$pageNum];
-    $lines = [
-        ['Applicant: ' . ($values['name'] ?? ''), 42, 785],
-        ['Email: ' . ($values['email'] ?? ''), 42, 770],
-        ['Phone: ' . ($values['phone'] ?? ''), 42, 755],
-        ['CPN: ' . ($values['cpn'] ?? ''), 42, 740],
-        ['Vocational Scope: ' . ($values['vocational_scope'] ?? ''), 42, 715],
-        ['Clinical Experience: ' . ($values['clinical_experience'] ?? ''), 42, 700],
-        ['Products: ' . ($values['products'] ?? ''), 42, 675],
-        ['Indication: ' . ($values['indication'] ?? ''), 42, 660],
-        ['Source: ' . ($values['source'] ?? ''), 42, 645],
-        ['Supporting Evidence: ' . ($values['supporting_evidence'] ?? ''), 42, 630],
-        ['Treatment Protocol: ' . ($values['treatment_protocol'] ?? ''), 42, 615],
-        ['Scientific Peer Review: ' . ($values['scientific_peer_review'] ?? ''), 42, 600],
-        ['Date: ' . ($values['date'] ?? ''), 42, 585],
-    ];
-
-    $stream = "BT
-/F1 9 Tf
-0 g
-";
-    foreach ($lines as [$txt, $x, $y]) {
-        $stream .= sprintf("1 0 0 1 %d %d Tm (%s) Tj
-", $x, $y, encodePdfString((string)$txt));
-    }
-    $stream .= "ET";
-
-    $newStreamObj = $maxObject + 1;
-    $newStreamContent = "<< /Length " . strlen($stream) . " >>
-stream
-$stream
-endstream";
-
-    if (preg_match('/\/Contents\s+(\d+)\s+0\s+R/', $pageObj, $m)) {
-        $origRef = $m[1] . ' 0 R';
-        $pageObj = preg_replace('/\/Contents\s+\d+\s+0\s+R/', '/Contents [' . $origRef . ' ' . $newStreamObj . ' 0 R]', $pageObj, 1);
-    } elseif (preg_match('/\/Contents\s*\[(.*?)\]/s', $pageObj, $m)) {
-        $existing = trim($m[1]);
-        $pageObj = preg_replace('/\/Contents\s*\[(.*?)\]/s', '/Contents [' . $existing . ' ' . $newStreamObj . ' 0 R]', $pageObj, 1);
-    } else {
-        $pageObj = preg_replace('/>>\s*$/s', '/Contents ' . $newStreamObj . ' 0 R >>', trim($pageObj));
-    }
-
-    $updates = [
-        $pageNum => $pageObj,
-        $newStreamObj => $newStreamContent,
-    ];
-
-    $merged = $objects;
-    foreach ($updates as $num => $content) {
-        $merged[$num] = $content;
-    }
-
     $rootObject = 0;
     if (preg_match('/trailer\s*<<.*?\/Root\s+(\d+)\s+\d+\s+R.*?>>/s', $pdf, $rootMatch)) {
         $rootObject = (int)$rootMatch[1];
     }
     if ($rootObject === 0) {
-        foreach ($merged as $num => $content) {
+        foreach ($objects as $num => $content) {
             if (preg_match('/\/Type\s*\/Catalog\b/', $content)) {
                 $rootObject = $num;
                 break;
             }
         }
     }
-    if ($rootObject === 0) {
+    if ($rootObject === 0 || !isset($objects[$rootObject])) {
         return false;
     }
 
-    $rebuilt = rebuildPdfFromObjects($merged, $rootObject, $pdf);
+    if (!preg_match('/\/Pages\s+(\d+)\s+0\s+R/', $objects[$rootObject], $pagesMatch)) {
+        return false;
+    }
+    $pagesObject = (int)$pagesMatch[1];
+    if (!isset($objects[$pagesObject])) {
+        return false;
+    }
+
+    if (!preg_match('/\/Kids\s*\[(.*?)\]/s', $objects[$pagesObject], $kidsMatch)) {
+        return false;
+    }
+
+    $kidsRaw = trim($kidsMatch[1]);
+    if ($kidsRaw === '') {
+        return false;
+    }
+
+    preg_match_all('/(\d+)\s+0\s+R/', $kidsRaw, $kidRefs);
+    if (empty($kidRefs[1])) {
+        return false;
+    }
+
+    $firstPage = (int)$kidRefs[1][0];
+    if (!isset($objects[$firstPage])) {
+        return false;
+    }
+
+    if (!preg_match('/\/MediaBox\s*\[(.*?)\]/', $objects[$firstPage], $mediaMatch)) {
+        $media = '0 0 595 842';
+    } else {
+        $media = trim($mediaMatch[1]);
+    }
+
+    $fontObj = $maxObject + 1;
+    $stream2Obj = $maxObject + 2;
+    $stream3Obj = $maxObject + 3;
+    $page2Obj = $maxObject + 4;
+    $page3Obj = $maxObject + 5;
+
+    $objects[$fontObj] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+
+    $linesPage2 = [
+        ['Form Submission Details - Step 1', 40, 805],
+        ['Applicant Name: ' . ($values['name'] ?? ''), 40, 775],
+        ['Email: ' . ($values['email'] ?? ''), 40, 757],
+        ['Phone: ' . ($values['phone'] ?? ''), 40, 739],
+        ['CPN: ' . ($values['cpn'] ?? ''), 40, 721],
+        ['Vocational Scope: ' . ($values['vocational_scope'] ?? ''), 40, 703],
+        ['Clinical Experience & Training:', 40, 685],
+        [($values['clinical_experience'] ?? ''), 40, 667],
+    ];
+
+    $linesPage3 = [
+        ['Form Submission Details - Step 2 & 3', 40, 805],
+        ['Products: ' . ($values['products'] ?? ''), 40, 775],
+        ['Indication: ' . ($values['indication'] ?? ''), 40, 757],
+        ['Sourcing Notes: ' . ($values['source'] ?? ''), 40, 739],
+        ['Supporting Evidence: ' . ($values['supporting_evidence'] ?? ''), 40, 721],
+        ['Treatment Protocol: ' . ($values['treatment_protocol'] ?? ''), 40, 703],
+        ['Scientific Peer Review: ' . ($values['scientific_peer_review'] ?? ''), 40, 685],
+        ['Application Date: ' . ($values['date'] ?? ''), 40, 667],
+        ['Signature Mode: ' . ($values['signature_mode'] ?? ''), 40, 649],
+    ];
+
+    $stream2 = buildPdfTextStream($linesPage2);
+    $stream3 = buildPdfTextStream($linesPage3);
+
+    $objects[$stream2Obj] = "<< /Length " . strlen($stream2) . " >>
+stream
+" . $stream2 . "
+endstream";
+    $objects[$stream3Obj] = "<< /Length " . strlen($stream3) . " >>
+stream
+" . $stream3 . "
+endstream";
+
+    $pageTemplate = '<< /Type /Page /Parent ' . $pagesObject . ' 0 R /MediaBox [' . $media . '] /Resources << /Font << /F1 ' . $fontObj . ' 0 R >> >> /Contents %d 0 R >>';
+    $objects[$page2Obj] = sprintf($pageTemplate, $stream2Obj);
+    $objects[$page3Obj] = sprintf($pageTemplate, $stream3Obj);
+
+    $kidsRefs = array_map(static fn($n) => $n . ' 0 R', $kidRefs[1]);
+    $kidsRefs[] = $page2Obj . ' 0 R';
+    $kidsRefs[] = $page3Obj . ' 0 R';
+    $newKids = '/Kids [' . implode(' ', $kidsRefs) . ']';
+    $pagesContent = preg_replace('/\/Kids\s*\[(.*?)\]/s', $newKids, $objects[$pagesObject], 1);
+    $pagesContent = preg_replace('/\/Count\s+\d+/', '/Count ' . count($kidsRefs), $pagesContent, 1, $countReplaced);
+    if (!$countReplaced) {
+        $pagesContent = preg_replace('/>>\s*$/', '/Count ' . count($kidsRefs) . ' >>', trim($pagesContent), 1);
+    }
+    $objects[$pagesObject] = $pagesContent;
+
+    $rebuilt = rebuildPdfFromObjects($objects, $rootObject, $pdf);
     if ($rebuilt === null) {
         return false;
     }
 
     return file_put_contents($outputPath, $rebuilt) !== false;
+}
+
+function buildPdfTextStream(array $lines): string
+{
+    $stream = "BT
+/F1 11 Tf
+0 g
+";
+    foreach ($lines as [$text, $x, $y]) {
+        $stream .= sprintf("1 0 0 1 %d %d Tm (%s) Tj
+", $x, $y, encodePdfString((string)$text));
+    }
+    $stream .= "ET";
+    return $stream;
 }
 
 function rebuildPdfFromObjects(array $objects, int $rootObject, string $originalPdf): ?string
