@@ -422,7 +422,7 @@ function createRegulatorPdf(array $submission, string $path): array
         return [true, null];
     }
 
-    return [false, 'Unable to write form fields into the Medsafe PDF template. Please verify field names via data/pdf_field_map.json mapping.'];
+    return [false, 'Unable to write form fields into the Medsafe PDF template. Please ensure template has writable AcroForm text fields.'];
 }
 
 function buildPdfFieldValueMap(array $submission): array
@@ -474,6 +474,7 @@ function fillTemplatePdfFields(string $templatePath, string $outputPath, array $
 
     $updates = [];
     $map = getPdfFieldMapping();
+    $fallbackIndex = 0;
 
     foreach ($objects as $num => $content) {
         $fieldName = extractPdfFieldName($content);
@@ -481,7 +482,7 @@ function fillTemplatePdfFields(string $templatePath, string $outputPath, array $
             continue;
         }
 
-        $fieldValue = resolveFieldValue($fieldName, $values, $map);
+        $fieldValue = resolveFieldValue($fieldName, $values, $map, $fallbackIndex);
         if ($fieldValue === null) {
             continue;
         }
@@ -625,7 +626,7 @@ function decodePdfHexString(string $hex): string
     return preg_replace('/[^ -~]/', '', $bin) ?? '';
 }
 
-function resolveFieldValue(string $fieldName, array $values, array $map): ?string
+function resolveFieldValue(string $fieldName, array $values, array $map, int &$fallbackIndex): ?string
 {
     $compact = (string)preg_replace('/[^a-z0-9]+/', '', strtolower($fieldName));
 
@@ -639,7 +640,16 @@ function resolveFieldValue(string $fieldName, array $values, array $map): ?strin
         }
     }
 
-    return null;
+    $keys = array_keys($values);
+    while ($fallbackIndex < count($keys)) {
+        $k = $keys[$fallbackIndex++];
+        $v = (string)($values[$k] ?? '');
+        if ($v !== '') {
+            return $v;
+        }
+    }
+
+    return '';
 }
 
 function decodePdfString(string $s): string
