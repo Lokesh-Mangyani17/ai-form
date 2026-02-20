@@ -13,6 +13,12 @@ define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
 const PDF_DEFAULT_SIGNATURE_Y = 548;
 /** @var float Horizontal offset from label to value in label-value pairs. */
 const PDF_LABEL_VALUE_OFFSET = 140;
+/** @var float Medsafe teal red component (#00594C). */
+const MEDSAFE_TEAL_R = 0.000;
+/** @var float Medsafe teal green component (#00594C). */
+const MEDSAFE_TEAL_G = 0.349;
+/** @var float Medsafe teal blue component (#00594C). */
+const MEDSAFE_TEAL_B = 0.298;
 
 bootstrapStorage();
 registerWordPressHooks();
@@ -546,10 +552,10 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $pageW = 595;
     $contentW = $pageW - $margin * 2;
 
-    // Medsafe teal: #00594C → RGB(0, 89, 76) → normalised (0.000, 0.349, 0.298)
-    $tealR = 0.000;
-    $tealG = 0.349;
-    $tealB = 0.298;
+    // Medsafe teal: #00594C – see MEDSAFE_TEAL_* constants.
+    $tealR = MEDSAFE_TEAL_R;
+    $tealG = MEDSAFE_TEAL_G;
+    $tealB = MEDSAFE_TEAL_B;
 
     // -- Page 1: Title + Applicant Details --
     $p1 = [];
@@ -560,6 +566,8 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $p1[] = pdfFillColor(1, 1, 1);
     $p1[] = pdfTextCommand('NEW ZEALAND GOVERNMENT', $margin, 828, 8);
     $p1[] = pdfBoldTextCommand('Medsafe', $margin, 812, 18);
+    // Note: "Manatu Hauora" omits the macron (Manatū) because Helvetica
+    // Type1 does not include glyphs outside WinAnsiEncoding.
     $p1[] = pdfTextCommand('Ministry of Health - Manatu Hauora', $margin, 798, 8);
 
     // Form title block below banner
@@ -945,7 +953,7 @@ function pdfLineCommand(float $x1, float $y1, float $x2, float $y2): string
     return number_format($x1, 2, '.', '') . ' ' . number_format($y1, 2, '.', '') . ' m ' . number_format($x2, 2, '.', '') . ' ' . number_format($y2, 2, '.', '') . ' l S';
 }
 
-function pdfSectionHeader(string $title, float $x, float $y, float $width, float $r = 0.0, float $g = 0.349, float $b = 0.298): string
+function pdfSectionHeader(string $title, float $x, float $y, float $width, float $r = MEDSAFE_TEAL_R, float $g = MEDSAFE_TEAL_G, float $b = MEDSAFE_TEAL_B): string
 {
     $commands = [];
     $commands[] = pdfFillColor(0.92, 0.96, 0.95);
@@ -967,7 +975,7 @@ function pdfLabelValue(string $label, string $value, float $x, float $y): string
     return implode("\n", $commands);
 }
 
-function pdfPageFooter(int $pageNum, int $totalPages, float $pageWidth, float $r = 0.0, float $g = 0.349, float $b = 0.298): string
+function pdfPageFooter(int $pageNum, int $totalPages, float $pageWidth, float $r = MEDSAFE_TEAL_R, float $g = MEDSAFE_TEAL_G, float $b = MEDSAFE_TEAL_B): string
 {
     $commands = [];
     $commands[] = pdfFillColor($r, $g, $b);
