@@ -688,16 +688,21 @@ function buildSignatureJpegObjectFromDataUrl(string $dataUrl): ?array
     $jpg = '';
     if (str_contains($meta, 'image/jpeg') || str_contains($meta, 'image/jpg')) {
         $jpg = $binary;
-    } elseif (function_exists('imagecreatefromstring') && function_exists('imagejpeg')) {
+    } elseif (function_exists('imagecreatefromstring') && function_exists('imagejpeg') && function_exists('imagecreatetruecolor')) {
         $img = @imagecreatefromstring($binary);
         if ($img) {
             if ($w < 1 || $h < 1) {
                 $w = imagesx($img);
                 $h = imagesy($img);
             }
+            $flattened = imagecreatetruecolor($w, $h);
+            $white = imagecolorallocate($flattened, 255, 255, 255);
+            imagefilledrectangle($flattened, 0, 0, $w, $h, $white);
+            imagecopy($flattened, $img, 0, 0, 0, 0, $w, $h);
             ob_start();
-            imagejpeg($img, null, 85);
+            imagejpeg($flattened, null, 85);
             $jpg = (string)ob_get_clean();
+            imagedestroy($flattened);
             imagedestroy($img);
         }
     }
@@ -887,7 +892,7 @@ function emailPdfToDoctor(string $submissionId): array
 <body>
 <div class="container">
   <header class="topbar">
-    <h1>Prescription Form Development</h1>
+    <h1>Allu Prescription Form</h1>
   </header>
 
   <?php if (!empty($_SESSION['form_success'])): ?>
@@ -1248,6 +1253,15 @@ if (canvas) {
   ctx.strokeStyle = '#111';
   ctx.lineWidth = 2;
 
+  const resetSignatureCanvas = () => {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = 2;
+  };
+
+  resetSignatureCanvas();
+
   const pos = e => {
     const r = canvas.getBoundingClientRect();
     const p = e.touches ? e.touches[0] : e;
@@ -1266,7 +1280,7 @@ if (canvas) {
   canvas.addEventListener('touchend', stop);
 
   document.getElementById('clearSig').addEventListener('click', () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    resetSignatureCanvas();
     document.getElementById('signatureDrawn').value = '';
   });
 }

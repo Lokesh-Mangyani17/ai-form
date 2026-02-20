@@ -121,6 +121,7 @@ select[multiple] { min-height: 130px; }
   border-radius: 12px;
   padding: 14px;
   background: #f9fbff;
+  margin-top: 18px;
 }
 .signature-fieldset legend { font-weight: 700; padding: 0 6px; }
 .signature-options { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
