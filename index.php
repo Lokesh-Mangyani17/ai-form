@@ -9,6 +9,10 @@ define('DOCTOR_PREFS_FILE', DATA_DIR . '/doctor_prefs.json');
 define('PDF_TEMPLATE_FILE', DATA_DIR . '/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_TEMPLATE_URL', 'https://www.medsafe.govt.nz/downloads/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
+/** @var float Default Y position for signature box on page 3. */
+const PDF_DEFAULT_SIGNATURE_Y = 548;
+/** @var float Horizontal offset from label to value in label-value pairs. */
+const PDF_LABEL_VALUE_OFFSET = 140;
 
 bootstrapStorage();
 registerWordPressHooks();
@@ -787,11 +791,6 @@ function buildSubmissionProductRows(array $submission): array
 
     return $rows;
 }
-
-/** @var float Default Y position for signature box on page 3. */
-const PDF_DEFAULT_SIGNATURE_Y = 548;
-/** @var float Horizontal offset from label to value in label-value pairs. */
-const PDF_LABEL_VALUE_OFFSET = 140;
 
 function writeSimpleThreePagePdf(string $path, string $stream1, string $stream2, string $stream3, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y): bool
 {
