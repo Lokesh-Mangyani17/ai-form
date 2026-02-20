@@ -472,31 +472,28 @@ function fillTemplatePdfFields(string $templatePath, string $outputPath, array $
     preg_match('/trailer\s*<<.*?\/Root\s+(\d+\s+\d+\s+R).*?>>/s', $pdf, $rootMatch);
     $rootRef = $rootMatch[1] ?? '1 0 R';
 
-    $updates = [];
     $map = getPdfFieldMapping();
     $fallbackIndex = 0;
+    $metaMemo = [];
+    $updates = [];
 
     foreach ($objects as $num => $content) {
-        $fieldName = extractPdfFieldName($content);
-        if ($fieldName === null || $fieldName === '') {
+        $meta = resolvePdfFieldMeta($num, $objects, $metaMemo);
+        if (!$meta['is_text'] || $meta['name'] === '') {
             continue;
         }
 
-        $fieldValue = resolveFieldValue($fieldName, $values, $map, $fallbackIndex);
+        $fieldValue = resolveFieldValue($meta['name'], $values, $map, $fallbackIndex);
         if ($fieldValue === null) {
             continue;
         }
 
-        $escaped = encodePdfString($fieldValue);
-        $newContent = preg_replace('/\/V\s*\((?:\.|[^\)])*\)/s', '', $content);
-        $newContent = preg_replace('/\/DV\s*\((?:\.|[^\)])*\)/s', '', $newContent);
-        $newContent = preg_replace('/\/V\s*<(?:[^>])*?>/s', '', $newContent);
-        $newContent = preg_replace('/\/DV\s*<(?:[^>])*?>/s', '', $newContent);
-
-        if (preg_match('/>>\s*$/s', trim($newContent))) {
-            $newContent = preg_replace('/>>\s*$/s', '/V (' . $escaped . ') /DV (' . $escaped . ') >>', trim($newContent));
-            $updates[$num] = $newContent;
+        $targetNum = $meta['value_obj'] ?: $num;
+        if (!isset($objects[$targetNum])) {
+            continue;
         }
+
+        $updates[$targetNum] = setPdfFieldValue($objects[$targetNum], (string)$fieldValue);
     }
 
     if (empty($updates)) {
@@ -559,6 +556,55 @@ startxref
 %%EOF";
 
     return file_put_contents($outputPath, $pdf . $append) !== false;
+}
+
+function resolvePdfFieldMeta(int $objNum, array $objects, array &$memo): array
+{
+    if (isset($memo[$objNum])) {
+        return $memo[$objNum];
+    }
+
+    $content = $objects[$objNum] ?? '';
+    $name = extractPdfFieldName($content) ?? '';
+    $isText = (bool)preg_match('/\/FT\s*\/Tx/', $content);
+    $valueObj = $isText ? $objNum : 0;
+
+    if (preg_match('/\/Parent\s+(\d+)\s+0\s+R/', $content, $parentMatch)) {
+        $parentNum = (int)$parentMatch[1];
+        if (isset($objects[$parentNum])) {
+            $parentMeta = resolvePdfFieldMeta($parentNum, $objects, $memo);
+            if ($name === '' && $parentMeta['name'] !== '') {
+                $name = $parentMeta['name'];
+            }
+            if (!$isText && $parentMeta['is_text']) {
+                $isText = true;
+                $valueObj = $parentMeta['value_obj'] ?: $parentNum;
+            }
+        }
+    }
+
+    $memo[$objNum] = [
+        'name' => $name,
+        'is_text' => $isText,
+        'value_obj' => $valueObj,
+    ];
+
+    return $memo[$objNum];
+}
+
+function setPdfFieldValue(string $content, string $value): string
+{
+    $escaped = encodePdfString($value);
+    $newContent = preg_replace('/\/V\s*\((?:\\.|[^\\)])*\)/s', '', $content);
+    $newContent = preg_replace('/\/DV\s*\((?:\\.|[^\\)])*\)/s', '', $newContent);
+    $newContent = preg_replace('/\/V\s*<(?:[^>])*?>/s', '', $newContent);
+    $newContent = preg_replace('/\/DV\s*<(?:[^>])*?>/s', '', $newContent);
+
+    if (preg_match('/>>\s*$/s', trim($newContent))) {
+        return preg_replace('/>>\s*$/s', '/V (' . $escaped . ') /DV (' . $escaped . ') >>', trim($newContent));
+    }
+
+    return trim($newContent) . ' /V (' . $escaped . ') /DV (' . $escaped . ')';
 }
 
 function extractPdfFieldName(string $content): ?string
