@@ -1,5 +1,6 @@
 <?php
 session_start();
+bootstrapWordPressRuntimeIfAvailable();
 
 define('DATA_DIR', __DIR__ . '/data');
 define('SUBMISSIONS_DIR', DATA_DIR . '/submissions');
@@ -59,6 +60,34 @@ if (($page === 'form') && ($_GET['submitted'] ?? '') === '1') {
     $submissionView = findSubmission($_GET['id'] ?? '');
     if (!$submissionView) {
         $error = 'Submitted record not found. Please try again.';
+    }
+}
+
+function bootstrapWordPressRuntimeIfAvailable(): void
+{
+    if (function_exists('wp_get_current_user')) {
+        return;
+    }
+
+    $candidates = [];
+    $docRoot = rtrim((string)($_SERVER['DOCUMENT_ROOT'] ?? ''), '/');
+    if ($docRoot !== '') {
+        $candidates[] = $docRoot . '/wp-load.php';
+    }
+
+    $dir = __DIR__;
+    for ($i = 0; $i < 5; $i++) {
+        $candidates[] = $dir . '/wp-load.php';
+        $dir = dirname($dir);
+    }
+
+    foreach (array_unique($candidates) as $path) {
+        if ($path && file_exists($path)) {
+            @include_once $path;
+            if (function_exists('wp_get_current_user')) {
+                return;
+            }
+        }
     }
 }
 
@@ -171,23 +200,30 @@ function savePrescriptionProductFields(int $productId): void
 
 function getDoctorProfile(): array
 {
-    if (isWordPressRuntime() && function_exists('is_user_logged_in') && is_user_logged_in()) {
+    if (isWordPressRuntime()) {
         $user = wp_get_current_user();
-        return [
-            'id' => (int)$user->ID,
-            'name' => trim($user->display_name ?: $user->user_firstname . ' ' . $user->user_lastname),
-            'email' => (string)$user->user_email,
-            'phone' => (string)get_user_meta($user->ID, 'billing_phone', true),
-            'cpn' => (string)get_user_meta($user->ID, 'cpn', true),
-        ];
+        if (!empty($user) && !empty($user->ID)) {
+            $name = trim((string)($user->display_name ?? ''));
+            if ($name === '') {
+                $name = trim(((string)($user->user_firstname ?? '')) . ' ' . ((string)($user->user_lastname ?? '')));
+            }
+
+            return [
+                'id' => (int)$user->ID,
+                'name' => $name,
+                'email' => (string)($user->user_email ?? ''),
+                'phone' => function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'billing_phone', true) : '',
+                'cpn' => function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'cpn', true) : '',
+            ];
+        }
     }
 
     return [
-        'id' => 1001,
-        'name' => 'Dr Jane Smith',
-        'email' => 'jane.smith@exampleclinic.nz',
-        'phone' => '+64 21 555 1234',
-        'cpn' => 'CPN-778899',
+        'id' => 0,
+        'name' => '',
+        'email' => '',
+        'phone' => '',
+        'cpn' => '',
     ];
 }
 
