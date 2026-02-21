@@ -466,6 +466,9 @@ function saveSubmission(array $doctor, array $post, array $files): array
     if ($vocationalToggle === 'no') {
         $vocationalScope = '';
     }
+    if ($vocationalToggle === 'yes' && $vocationalScope === '') {
+        return [false, null, 'Please specify your vocational scope(s).', null];
+    }
     if (trim((string)($post['clinical_experience'] ?? '')) === '') {
         return [false, null, 'Clinical Experience & Training is required.', null];
     }
@@ -1669,13 +1672,13 @@ function emailPdfToDoctor(string $submissionId): array
           <label>Does your annual practicing certificate (APC) include vocational scope(s)?
             <div style="display:flex;gap:16px;margin-top:4px;">
               <label style="flex-direction:row;align-items:center;font-weight:400;margin-top:0;">
-                <input type="radio" name="vocational_scope_toggle" value="no" <?= ($doctorPrefs['vocational_scope'] === '') ? 'checked' : '' ?> /> No
+                <input type="radio" name="vocational_scope_toggle" value="no" <?= (trim((string)($doctorPrefs['vocational_scope'] ?? '')) === '') ? 'checked' : '' ?> /> No
               </label>
               <label style="flex-direction:row;align-items:center;font-weight:400;margin-top:0;">
-                <input type="radio" name="vocational_scope_toggle" value="yes" <?= ($doctorPrefs['vocational_scope'] !== '') ? 'checked' : '' ?> /> Yes
+                <input type="radio" name="vocational_scope_toggle" value="yes" <?= (trim((string)($doctorPrefs['vocational_scope'] ?? '')) !== '') ? 'checked' : '' ?> /> Yes
               </label>
             </div>
-            <div id="vocationalScopeTextWrap" class="<?= ($doctorPrefs['vocational_scope'] === '') ? 'hidden' : '' ?>">
+            <div id="vocationalScopeTextWrap" class="<?= (trim((string)($doctorPrefs['vocational_scope'] ?? '')) === '') ? 'hidden' : '' ?>">
               <textarea name="vocational_scope" placeholder="Please specify your vocational scope(s)"><?= htmlspecialchars($doctorPrefs['vocational_scope']) ?></textarea>
             </div>
           </label>
@@ -1905,12 +1908,6 @@ function syncProductAuto() {
       wrapper.appendChild(lbl);
       productIndicationsContainer.appendChild(wrapper);
     });
-
-    // Also update the hidden single indication for backward compatibility
-    if (selected.length === 1) {
-      const singleSel = productIndicationsContainer.querySelector('select');
-      if (singleSel && indicationSelect) indicationSelect.value = singleSel.value;
-    }
   }
 
   syncIndicationAuto();
