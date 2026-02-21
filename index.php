@@ -15,6 +15,8 @@ const PDF_DEFAULT_SIGNATURE_Y = 536;
 const PDF_LABEL_VALUE_OFFSET = 120;
 /** @var int Total number of pages in the generated PDF. */
 const PDF_TOTAL_PAGES = 6;
+/** @var float Approximate character width multiplier for Helvetica/Helvetica-Bold at a given font size. */
+const PDF_CHAR_WIDTH_FACTOR = 0.55;
 /** @var float Medsafe purple red component (#573F7F). */
 const MEDSAFE_PURPLE_R = 0.341;
 /** @var float Medsafe purple green component (#573F7F). */
@@ -1601,8 +1603,7 @@ function pdfRichTextLine(string $line, float $x, float $y, float $size): array
         $boldPart = $m[1] . ' ' . $m[2] . ':';
         $plainPart = ' ' . $m[3];
         $commands[] = pdfBoldTextCommand($boldPart, $x, $y, $size);
-        // Approximate bold part width: each character ~0.55 * size for Helvetica-Bold
-        $boldWidth = mb_strlen($boldPart, 'UTF-8') * $size * 0.55;
+        $boldWidth = mb_strlen($boldPart, 'UTF-8') * $size * PDF_CHAR_WIDTH_FACTOR;
         if (trim($m[3]) !== '') {
             $commands[] = pdfTextCommand(trim($plainPart), $x + $boldWidth, $y, $size);
         }
@@ -1619,7 +1620,8 @@ function pdfRichTextLine(string $line, float $x, float $y, float $size): array
 function pdfDetectUrlAnnotations(string $line, float $x, float $y, float $size, float $pageHeight): array
 {
     $annotations = [];
-    $charWidth = $size * 0.55;
+    $charWidth = $size * PDF_CHAR_WIDTH_FACTOR;
+    // Match http/https URLs terminated by whitespace, closing paren/bracket, or >
     if (preg_match_all('#https?://[^\s)\]>]+#i', $line, $matches, PREG_OFFSET_CAPTURE)) {
         foreach ($matches[0] as $match) {
             $url = $match[0];
