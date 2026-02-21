@@ -1311,11 +1311,18 @@ endstream";
 
 function buildJpegObjectFromFile(string $filePath): ?array
 {
-    if (!file_exists($filePath)) {
+    $realPath = realpath($filePath);
+    if ($realPath === false || !file_exists($realPath)) {
         return null;
     }
 
-    $binary = file_get_contents($filePath);
+    // Only allow files within the application directory
+    $appDir = realpath(__DIR__);
+    if ($appDir === false || strpos($realPath, $appDir) !== 0) {
+        return null;
+    }
+
+    $binary = file_get_contents($realPath);
     if ($binary === false || $binary === '') {
         return null;
     }
@@ -1923,10 +1930,16 @@ const decodeJsonData = (value, fallback = []) => {
   try { return JSON.parse(value || '[]'); } catch (e) { return fallback; }
 };
 
+const escapeHtml = (str) => {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+};
+
 function buildAutoDisplayHtml(selected, field) {
   return selected.map(o => {
-    const name = o.dataset.name || '';
-    const val = o.dataset[field] || '-';
+    const name = escapeHtml(o.dataset.name || '');
+    const val = escapeHtml(o.dataset[field] || '-');
     return `<div><span class="auto-product-name">${name}:</span> <span class="auto-product-value">${val}</span></div>`;
   }).join('');
 }
