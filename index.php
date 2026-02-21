@@ -215,14 +215,22 @@ function getDoctorProfile(): array
     if (isWordPressRuntime()) {
         $user = wp_get_current_user();
         if (!empty($user) && !empty($user->ID)) {
+            $firstName = trim((string)($user->user_firstname ?? ''));
+            $surname = trim((string)($user->user_lastname ?? ''));
             $name = trim((string)($user->display_name ?? ''));
             if ($name === '') {
-                $name = trim(((string)($user->user_firstname ?? '')) . ' ' . ((string)($user->user_lastname ?? '')));
+                $name = trim($firstName . ' ' . $surname);
             }
+            $title = function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'title', true) : '';
+            $preferredName = function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'preferred_name', true) : '';
 
             return [
                 'id' => (int)$user->ID,
                 'name' => $name,
+                'title' => $title,
+                'first_name' => $firstName,
+                'preferred_name' => $preferredName,
+                'surname' => $surname,
                 'email' => (string)($user->user_email ?? ''),
                 'phone' => function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'billing_phone', true) : '',
                 'cpn' => function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'cpn', true) : '',
@@ -233,6 +241,10 @@ function getDoctorProfile(): array
     return [
         'id' => 0,
         'name' => '',
+        'title' => '',
+        'first_name' => '',
+        'preferred_name' => '',
+        'surname' => '',
         'email' => '',
         'phone' => '',
         'cpn' => '',
@@ -449,8 +461,10 @@ function saveSubmission(array $doctor, array $post, array $files): array
         return [false, null, 'Please select at least one product.', null];
     }
 
-    if (trim((string)($post['vocational_scope'] ?? '')) === '') {
-        return [false, null, 'Vocational Scope is required.', null];
+    $vocationalToggle = trim($post['vocational_scope_toggle'] ?? 'no');
+    $vocationalScope = trim((string)($post['vocational_scope'] ?? ''));
+    if ($vocationalToggle === 'no') {
+        $vocationalScope = '';
     }
     if (trim((string)($post['clinical_experience'] ?? '')) === '') {
         return [false, null, 'Clinical Experience & Training is required.', null];
@@ -477,15 +491,38 @@ function saveSubmission(array $doctor, array $post, array $files): array
         return [false, null, 'Please upload a signature image.', null];
     }
 
-    $indication = trim($post['indication'] ?? '');
-    $indicationOther = trim($post['indication_other'] ?? '');
-    if ($indication === '') {
-        return [false, null, 'Please select an indication.', null];
+    // Handle per-product indications
+    $productIndications = $post['product_indications'] ?? [];
+    $productIndicationOthers = $post['product_indication_others'] ?? [];
+    if (!is_array($productIndications)) {
+        $productIndications = [];
     }
-    if ($indication === 'Other' && $indicationOther === '') {
-        return [false, null, 'Please enter a custom indication.', null];
+    if (!is_array($productIndicationOthers)) {
+        $productIndicationOthers = [];
     }
 
+    $indicationParts = [];
+    foreach ($selectedProducts as $pid) {
+        $ind = trim((string)($productIndications[$pid] ?? ''));
+        if ($ind === '') {
+            return [false, null, 'Please select an indication for each product.', null];
+        }
+        if ($ind === 'Other') {
+            $other = trim((string)($productIndicationOthers[$pid] ?? ''));
+            if ($other === '') {
+                return [false, null, 'Please enter a custom indication for each product.', null];
+            }
+            $indicationParts[] = $other;
+        } else {
+            $indicationParts[] = $ind;
+        }
+    }
+    // Build a combined indication string for backward compatibility / PDF
+    $indication = implode('; ', array_unique($indicationParts));
+    $indicationOther = '';
+
+    // Override vocational_scope in post for saveDoctorPrefs
+    $post['vocational_scope'] = $vocationalScope;
     saveDoctorPrefs((int)$doctor['id'], $post);
 
     $selectedDetails = buildSelectedProductDetails($selectedProducts);
@@ -497,11 +534,13 @@ function saveSubmission(array $doctor, array $post, array $files): array
         'submitted_at' => date('c'),
         'doctor' => $doctor,
         'form' => [
-            'vocational_scope' => trim($post['vocational_scope'] ?? ''),
+            'vocational_scope' => $vocationalScope,
             'clinical_experience' => trim($post['clinical_experience'] ?? ''),
             'products' => $selectedProducts,
             'product_names' => $productNames,
             'product_details' => $selectedDetails,
+            'product_indications' => $productIndications,
+            'product_indication_others' => $productIndicationOthers,
             'indication' => $indication,
             'indication_other' => $indicationOther,
             'sourcing_notes' => trim($post['sourcing_notes'] ?? ''),
@@ -680,11 +719,17 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         ['1.4. Surname:', 159.5, 117.13, 573.17],
     ];
 
-    $doctorName = (string)($doctor['name'] ?? '');
-    $nameParts = explode(' ', $doctorName, 2);
-    $firstName = $nameParts[0] ?? '';
-    $surname = $nameParts[1] ?? '';
-    $fieldValues = ['', $firstName, '', $surname];
+    $doctorTitle = (string)($doctor['title'] ?? '');
+    $firstName = (string)($doctor['first_name'] ?? '');
+    $preferredName = (string)($doctor['preferred_name'] ?? '');
+    $surname = (string)($doctor['surname'] ?? '');
+    if ($firstName === '' && $surname === '') {
+        $doctorName = (string)($doctor['name'] ?? '');
+        $nameParts = explode(' ', $doctorName, 2);
+        $firstName = $nameParts[0] ?? '';
+        $surname = $nameParts[1] ?? '';
+    }
+    $fieldValues = [$doctorTitle, $firstName, $preferredName, $surname];
 
     foreach ($fieldDefs as $idx => $fd) {
         $p2[] = pdfTextCommand($fd[0], $bodyMargin, $yt($fd[1], 10), 10);
@@ -1601,14 +1646,40 @@ function emailPdfToDoctor(string $submissionId): array
           <p>This digital interface is provided by Allu Therapeutics as a specialised tool to facilitate the compilation and generation of a formal application to Medsafe under Regulation 22 of the Misuse of Drugs Regulations 1977. Use of this platform does not constitute medical or regulatory advice. The Prescribing Doctor, as the Applicant, remains the primary Health Agency under the Health Information Privacy Code 2020 and bears sole legal and clinical responsibility for the accuracy of the protocol, the selection of patients, and the provision of unapproved controlled drugs. Allu Therapeutics acts as a secure data processor; all private clinical data is encrypted and held in strict confidence, accessible only to the authorised prescriber to support their professional obligations and mandatory safety reporting to the Ministry of Health. By utilising this facilitation tool, the prescriber acknowledges that Medsafe’s Ministerial approval is subject to their own clinical expertise, independent scientific peer review, and adherence to the applicable professional standards.</p>
         </div>
         <div class="grid two">
-          <label>Name<input value="<?= htmlspecialchars($doctor['name']) ?>" readonly /></label>
+          <label>Title<input value="<?= htmlspecialchars($doctor['title']) ?>" readonly /></label>
+          <label>First Name<input value="<?= htmlspecialchars($doctor['first_name']) ?>" readonly /></label>
+          <label>Preferred Name<input value="<?= htmlspecialchars($doctor['preferred_name']) ?>" readonly /></label>
+          <label>Surname<input value="<?= htmlspecialchars($doctor['surname']) ?>" readonly /></label>
+        </div>
+        <p style="font-weight:600;font-size:13px;margin:14px 0 4px;color:var(--text);">Contact Details</p>
+        <div class="grid two">
           <label>Email<input value="<?= htmlspecialchars($doctor['email']) ?>" readonly /></label>
           <label>Phone<input value="<?= htmlspecialchars($doctor['phone']) ?>" readonly /></label>
-          <label>CPN<input value="<?= htmlspecialchars($doctor['cpn']) ?>" readonly /></label>
-          <label>Vocational Scope
-            <textarea name="vocational_scope" required><?= htmlspecialchars($doctorPrefs['vocational_scope']) ?></textarea>
+          <label>HPI-CPN<input value="<?= htmlspecialchars($doctor['cpn']) ?>" readonly /></label>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:6px 0 12px;">
+          These details are fetched from your profile.
+          <?php if (isWordPressRuntime()): ?>
+            <a href="<?= esc_url(get_edit_profile_url()) ?>" target="_blank" style="color:var(--primary);">Edit your profile</a>
+          <?php else: ?>
+            <a href="#" style="color:var(--primary);">Edit your profile</a>
+          <?php endif; ?>
+        </p>
+        <div class="grid two">
+          <label>Does your annual practicing certificate (APC) include vocational scope(s)?
+            <div style="display:flex;gap:16px;margin-top:4px;">
+              <label style="flex-direction:row;align-items:center;font-weight:400;margin-top:0;">
+                <input type="radio" name="vocational_scope_toggle" value="no" <?= ($doctorPrefs['vocational_scope'] === '') ? 'checked' : '' ?> /> No
+              </label>
+              <label style="flex-direction:row;align-items:center;font-weight:400;margin-top:0;">
+                <input type="radio" name="vocational_scope_toggle" value="yes" <?= ($doctorPrefs['vocational_scope'] !== '') ? 'checked' : '' ?> /> Yes
+              </label>
+            </div>
+            <div id="vocationalScopeTextWrap" class="<?= ($doctorPrefs['vocational_scope'] === '') ? 'hidden' : '' ?>">
+              <textarea name="vocational_scope" placeholder="Please specify your vocational scope(s)"><?= htmlspecialchars($doctorPrefs['vocational_scope']) ?></textarea>
+            </div>
           </label>
-          <label>Clinical Experience & Training
+          <label>Clinical Experience &amp; Training
             <textarea name="clinical_experience" required><?= htmlspecialchars($doctorPrefs['clinical_experience']) ?></textarea>
           </label>
         </div>
@@ -1657,11 +1728,12 @@ function emailPdfToDoctor(string $submissionId): array
           </label>
         </div>
 
-        <label>Indication
-          <select id="indicationSelect" name="indication" required>
+        <label class="hidden">Indication
+          <select id="indicationSelect" name="indication" class="hidden">
             <option value="">Select indication</option>
           </select>
         </label>
+        <div id="productIndicationsContainer"></div>
         <label id="indicationOtherWrap" class="hidden">Other indication
           <input type="text" name="indication_other" id="indicationOtherInput" placeholder="Enter custom indication" />
         </label>
@@ -1741,6 +1813,7 @@ if (steps.length) showStep(0);
 const productWrap = document.getElementById('products');
 const indicationSelect = document.getElementById('indicationSelect');
 const indicationOtherWrap = document.getElementById('indicationOtherWrap');
+const productIndicationsContainer = document.getElementById('productIndicationsContainer');
 
 const decodeJsonData = (value, fallback = []) => {
   try { return JSON.parse(value || '[]'); } catch (e) { return fallback; }
@@ -1760,39 +1833,102 @@ function syncProductAuto() {
   document.getElementById('formAuto').value = forms;
   document.getElementById('sourcingAuto').value = sources;
 
-  const indicationSet = new Set();
-  selected.forEach(o => decodeJsonData(o.dataset.indications, []).forEach(i => indicationSet.add(i)));
-
-  if (indicationSelect) {
-    const current = indicationSelect.value;
-    indicationSelect.innerHTML = '<option value="">Select indication</option>';
-    [...indicationSet].forEach(ind => {
-      const opt = document.createElement('option');
-      opt.value = ind;
-      opt.textContent = ind;
-      indicationSelect.appendChild(opt);
+  // Build per-product indication dropdowns
+  if (productIndicationsContainer) {
+    const existingValues = {};
+    productIndicationsContainer.querySelectorAll('select[name^="product_indications"]').forEach(sel => {
+      const pid = sel.getAttribute('data-product-id');
+      if (pid) existingValues[pid] = sel.value;
     });
-    const otherOpt = document.createElement('option');
-    otherOpt.value = 'Other';
-    otherOpt.textContent = 'Other';
-    indicationSelect.appendChild(otherOpt);
-    if ([...indicationSelect.options].some(o => o.value === current)) indicationSelect.value = current;
+    const existingOthers = {};
+    productIndicationsContainer.querySelectorAll('input[name^="product_indication_others"]').forEach(inp => {
+      const pid = inp.getAttribute('data-product-id');
+      if (pid) existingOthers[pid] = inp.value;
+    });
+
+    productIndicationsContainer.innerHTML = '';
+    selected.forEach(o => {
+      const pid = o.value;
+      const pName = o.dataset.name;
+      const indications = decodeJsonData(o.dataset.indications, []);
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'product-indication-row';
+      wrapper.style.cssText = 'margin-top:10px;';
+
+      const lbl = document.createElement('label');
+      lbl.textContent = 'Indication for ' + pName;
+
+      const sel = document.createElement('select');
+      sel.name = 'product_indications[' + pid + ']';
+      sel.setAttribute('data-product-id', pid);
+      sel.required = true;
+
+      const defaultOpt = document.createElement('option');
+      defaultOpt.value = '';
+      defaultOpt.textContent = 'Select indication';
+      sel.appendChild(defaultOpt);
+
+      indications.forEach(ind => {
+        const opt = document.createElement('option');
+        opt.value = ind;
+        opt.textContent = ind;
+        sel.appendChild(opt);
+      });
+
+      const otherOpt = document.createElement('option');
+      otherOpt.value = 'Other';
+      otherOpt.textContent = 'Other';
+      sel.appendChild(otherOpt);
+
+      if (existingValues[pid] && [...sel.options].some(op => op.value === existingValues[pid])) {
+        sel.value = existingValues[pid];
+      }
+
+      const otherInput = document.createElement('input');
+      otherInput.type = 'text';
+      otherInput.name = 'product_indication_others[' + pid + ']';
+      otherInput.setAttribute('data-product-id', pid);
+      otherInput.placeholder = 'Enter custom indication';
+      otherInput.style.cssText = 'margin-top:6px;';
+      otherInput.className = (sel.value === 'Other') ? '' : 'hidden';
+      if (existingOthers[pid]) otherInput.value = existingOthers[pid];
+
+      sel.addEventListener('change', () => {
+        otherInput.className = (sel.value === 'Other') ? '' : 'hidden';
+        if (sel.value !== 'Other') otherInput.value = '';
+        syncIndicationAuto();
+      });
+
+      lbl.appendChild(sel);
+      lbl.appendChild(otherInput);
+      wrapper.appendChild(lbl);
+      productIndicationsContainer.appendChild(wrapper);
+    });
+
+    // Also update the hidden single indication for backward compatibility
+    if (selected.length === 1) {
+      const singleSel = productIndicationsContainer.querySelector('select');
+      if (singleSel && indicationSelect) indicationSelect.value = singleSel.value;
+    }
   }
 
   syncIndicationAuto();
 }
 
 function syncIndicationAuto() {
-  if (!productWrap || !indicationSelect) return;
+  if (!productWrap) return;
   const selected = [...document.querySelectorAll('.product-check:checked')];
-  const indication = indicationSelect.value;
 
   const supporting = [];
   const protocol = [];
   const peerReview = [];
 
   selected.forEach(o => {
+    const pid = o.value;
     const map = decodeJsonData(o.dataset.indicationMap, {});
+    const sel = productIndicationsContainer ? productIndicationsContainer.querySelector('select[data-product-id="' + pid + '"]') : null;
+    const indication = sel ? sel.value : '';
     const row = map[indication] || null;
     if (!row) return;
     supporting.push(`• ${o.dataset.name}: ${row.supporting_evidence || '-'}`);
@@ -1803,39 +1939,42 @@ function syncIndicationAuto() {
   document.getElementById('supportingEvidenceAuto').value = supporting.join('\n');
   document.getElementById('treatmentProtocolAuto').value = protocol.join('\n');
   document.getElementById('peerReviewAuto').value = peerReview.join('\n');
-
-  if (indication === 'Other') {
-    indicationOtherWrap.classList.remove('hidden');
-  } else {
-    indicationOtherWrap.classList.add('hidden');
-    document.getElementById('indicationOtherInput').value = '';
-  }
 }
 
 if (productWrap) {
   productWrap.addEventListener('change', syncProductAuto);
   syncProductAuto();
 }
-if (indicationSelect) {
-  indicationSelect.addEventListener('change', syncIndicationAuto);
-}
 if (submitBtn) {
   submitBtn.addEventListener('click', (e) => {
     const errors = [];
-    const selectedProducts = document.querySelectorAll('.product-check:checked').length;
+    const selectedProducts = document.querySelectorAll('.product-check:checked');
+    const vocationalToggle = document.querySelector('input[name="vocational_scope_toggle"]:checked')?.value || 'no';
     const vocational = document.querySelector('textarea[name="vocational_scope"]')?.value.trim();
     const experience = document.querySelector('textarea[name="clinical_experience"]')?.value.trim();
     const date = document.querySelector('input[name="application_date"]')?.value.trim();
-    const indication = indicationSelect ? indicationSelect.value : '';
     const mode = document.querySelector('input[name="signature_mode"]:checked')?.value || '';
     const drawn = document.getElementById('signatureDrawn')?.value || '';
     const uploadFile = document.querySelector('input[name="signature_upload"]')?.files?.length || 0;
 
-    if (!vocational) errors.push('Vocational Scope is required.');
+    if (vocationalToggle === 'yes' && !vocational) errors.push('Please specify your vocational scope(s).');
     if (!experience) errors.push('Clinical Experience & Training is required.');
-    if (!selectedProducts) errors.push('Please select at least one product.');
-    if (!indication) errors.push('Please select an indication.');
-    if (indication === 'Other' && !document.getElementById('indicationOtherInput')?.value.trim()) errors.push('Please enter a custom indication.');
+    if (!selectedProducts.length) errors.push('Please select at least one product.');
+
+    // Validate per-product indications
+    if (productIndicationsContainer) {
+      selectedProducts.forEach(chk => {
+        const pid = chk.value;
+        const pName = chk.dataset.name;
+        const sel = productIndicationsContainer.querySelector('select[data-product-id="' + pid + '"]');
+        if (sel && !sel.value) errors.push('Please select an indication for ' + pName + '.');
+        if (sel && sel.value === 'Other') {
+          const otherInp = productIndicationsContainer.querySelector('input[data-product-id="' + pid + '"]');
+          if (otherInp && !otherInp.value.trim()) errors.push('Please enter a custom indication for ' + pName + '.');
+        }
+      });
+    }
+
     if (!date) errors.push('Application date is required.');
     if (mode === 'draw' && !drawn) errors.push('Please provide a drawn signature.');
     if (mode === 'upload' && !uploadFile) errors.push('Please upload a signature image.');
@@ -1857,6 +1996,19 @@ if (submitBtn) {
 
 const drawWrap = document.getElementById('drawWrap');
 const uploadWrap = document.getElementById('uploadWrap');
+const vocScopeWrap = document.getElementById('vocationalScopeTextWrap');
+document.querySelectorAll('input[name="vocational_scope_toggle"]').forEach(r => {
+  r.addEventListener('change', () => {
+    const yes = document.querySelector('input[name="vocational_scope_toggle"]:checked').value === 'yes';
+    if (vocScopeWrap) {
+      vocScopeWrap.classList.toggle('hidden', !yes);
+      if (!yes) {
+        const ta = vocScopeWrap.querySelector('textarea[name="vocational_scope"]');
+        if (ta) ta.value = '';
+      }
+    }
+  });
+});
 document.querySelectorAll('input[name="signature_mode"]').forEach(r => {
   r.addEventListener('change', () => {
     const draw = document.querySelector('input[name="signature_mode"]:checked').value === 'draw';
