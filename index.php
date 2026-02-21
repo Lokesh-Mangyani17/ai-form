@@ -1648,6 +1648,14 @@ function emailPdfToDoctor(string $submissionId): array
         <div class="disclaimer">
           <p>This digital interface is provided by Allu Therapeutics as a specialised tool to facilitate the compilation and generation of a formal application to Medsafe under Regulation 22 of the Misuse of Drugs Regulations 1977. Use of this platform does not constitute medical or regulatory advice. The Prescribing Doctor, as the Applicant, remains the primary Health Agency under the Health Information Privacy Code 2020 and bears sole legal and clinical responsibility for the accuracy of the protocol, the selection of patients, and the provision of unapproved controlled drugs. Allu Therapeutics acts as a secure data processor; all private clinical data is encrypted and held in strict confidence, accessible only to the authorised prescriber to support their professional obligations and mandatory safety reporting to the Ministry of Health. By utilising this facilitation tool, the prescriber acknowledges that Medsafe’s Ministerial approval is subject to their own clinical expertise, independent scientific peer review, and adherence to the applicable professional standards.</p>
         </div>
+        <p style="font-size:12px;color:var(--muted);margin:6px 0 12px;">
+          These details are fetched from your profile.
+          <?php if (isWordPressRuntime()): ?>
+            <a href="<?= esc_url(get_edit_profile_url()) ?>" target="_blank" style="color:var(--primary);">Edit your profile</a>
+          <?php else: ?>
+            <a href="#" style="color:var(--primary);">Edit your profile</a>
+          <?php endif; ?>
+        </p>
         <div class="grid two">
           <label>Title<input value="<?= htmlspecialchars($doctor['title']) ?>" readonly /></label>
           <label>First Name<input value="<?= htmlspecialchars($doctor['first_name']) ?>" readonly /></label>
@@ -1660,14 +1668,6 @@ function emailPdfToDoctor(string $submissionId): array
           <label>Phone<input value="<?= htmlspecialchars($doctor['phone']) ?>" readonly /></label>
           <label>HPI-CPN<input value="<?= htmlspecialchars($doctor['cpn']) ?>" readonly /></label>
         </div>
-        <p style="font-size:12px;color:var(--muted);margin:6px 0 12px;">
-          These details are fetched from your profile.
-          <?php if (isWordPressRuntime()): ?>
-            <a href="<?= esc_url(get_edit_profile_url()) ?>" target="_blank" style="color:var(--primary);">Edit your profile</a>
-          <?php else: ?>
-            <a href="#" style="color:var(--primary);">Edit your profile</a>
-          <?php endif; ?>
-        </p>
         <div class="grid two">
           <label>Does your annual practicing certificate (APC) include vocational scope(s)?
             <div style="display:flex;gap:16px;margin-top:4px;">
