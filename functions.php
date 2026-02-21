@@ -25,10 +25,26 @@ function ai_form_register_backend_fields(): void
 function ai_form_render_cpn_user_field(WP_User $user): void
 {
     $cpn = get_user_meta($user->ID, 'cpn', true);
+    $title = get_user_meta($user->ID, 'title', true);
+    $preferredName = get_user_meta($user->ID, 'preferred_name', true);
     wp_nonce_field('ai_form_save_cpn', 'ai_form_cpn_nonce');
     ?>
     <h2>Prescription Form Fields</h2>
     <table class="form-table" role="presentation">
+        <tr>
+            <th><label for="ai_form_title"><?php esc_html_e('Title', 'ai-form'); ?></label></th>
+            <td>
+                <input type="text" name="title" id="ai_form_title" value="<?php echo esc_attr((string) $title); ?>" class="regular-text" />
+                <p class="description"><?php esc_html_e('Used to auto-fill the prescription form Title field (e.g. Dr).', 'ai-form'); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th><label for="ai_form_preferred_name"><?php esc_html_e('Preferred Name', 'ai-form'); ?></label></th>
+            <td>
+                <input type="text" name="preferred_name" id="ai_form_preferred_name" value="<?php echo esc_attr((string) $preferredName); ?>" class="regular-text" />
+                <p class="description"><?php esc_html_e('Used to auto-fill the prescription form Preferred Name field. If left empty, First Name is used.', 'ai-form'); ?></p>
+            </td>
+        </tr>
         <tr>
             <th><label for="cpn"><?php esc_html_e('CPN', 'ai-form'); ?></label></th>
             <td>
@@ -52,6 +68,12 @@ function ai_form_save_cpn_user_field(int $user_id): void
 
     $cpn = isset($_POST['cpn']) ? sanitize_text_field(wp_unslash($_POST['cpn'])) : '';
     update_user_meta($user_id, 'cpn', $cpn);
+
+    $title = isset($_POST['title']) ? sanitize_text_field(wp_unslash($_POST['title'])) : '';
+    update_user_meta($user_id, 'title', $title);
+
+    $preferredName = isset($_POST['preferred_name']) ? sanitize_text_field(wp_unslash($_POST['preferred_name'])) : '';
+    update_user_meta($user_id, 'preferred_name', $preferredName);
 }
 
 function ai_form_render_prescription_product_fields(): void

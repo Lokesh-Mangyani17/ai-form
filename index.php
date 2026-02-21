@@ -129,11 +129,17 @@ function renderCpnUserField($user): void
         return;
     }
     $cpn = get_user_meta($user->ID, 'cpn', true);
+    $title = get_user_meta($user->ID, 'title', true);
+    $preferredName = get_user_meta($user->ID, 'preferred_name', true);
     echo '<h2>Prescription Form Fields</h2>';
-    echo '<table class="form-table"><tr>';
-    echo '<th><label for="cpn">CPN</label></th>';
-    echo '<td><input type="text" name="cpn" id="cpn" value="' . esc_attr($cpn) . '" class="regular-text" /></td>';
-    echo '</tr></table>';
+    echo '<table class="form-table">';
+    echo '<tr><th><label for="ai_form_title">Title</label></th>';
+    echo '<td><input type="text" name="title" id="ai_form_title" value="' . esc_attr($title) . '" class="regular-text" /></td></tr>';
+    echo '<tr><th><label for="ai_form_preferred_name">Preferred Name</label></th>';
+    echo '<td><input type="text" name="preferred_name" id="ai_form_preferred_name" value="' . esc_attr($preferredName) . '" class="regular-text" /></td></tr>';
+    echo '<tr><th><label for="cpn">CPN</label></th>';
+    echo '<td><input type="text" name="cpn" id="cpn" value="' . esc_attr($cpn) . '" class="regular-text" /></td></tr>';
+    echo '</table>';
 }
 
 function saveCpnUserField(int $userId): void
@@ -141,8 +147,16 @@ function saveCpnUserField(int $userId): void
     if (!function_exists('current_user_can') || !current_user_can('edit_user', $userId)) {
         return;
     }
-    if (isset($_POST['cpn']) && function_exists('update_user_meta')) {
-        update_user_meta($userId, 'cpn', sanitize_text_field($_POST['cpn']));
+    if (function_exists('update_user_meta')) {
+        if (isset($_POST['cpn'])) {
+            update_user_meta($userId, 'cpn', sanitize_text_field($_POST['cpn']));
+        }
+        if (isset($_POST['title'])) {
+            update_user_meta($userId, 'title', sanitize_text_field($_POST['title']));
+        }
+        if (isset($_POST['preferred_name'])) {
+            update_user_meta($userId, 'preferred_name', sanitize_text_field($_POST['preferred_name']));
+        }
     }
 }
 
@@ -223,6 +237,9 @@ function getDoctorProfile(): array
             }
             $title = function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'title', true) : '';
             $preferredName = function_exists('get_user_meta') ? (string)get_user_meta($user->ID, 'preferred_name', true) : '';
+            if (trim($preferredName) === '') {
+                $preferredName = $firstName;
+            }
 
             return [
                 'id' => (int)$user->ID,
@@ -504,6 +521,12 @@ function saveSubmission(array $doctor, array $post, array $files): array
         $productIndicationOthers = [];
     }
 
+    $selectedDetails = buildSelectedProductDetails($selectedProducts);
+    $productLookup = [];
+    foreach ($selectedDetails as $p) {
+        $productLookup[(string)$p['id']] = $p['name'];
+    }
+
     $indicationParts = [];
     foreach ($selectedProducts as $pid) {
         $ind = trim((string)($productIndications[$pid] ?? ''));
@@ -515,20 +538,21 @@ function saveSubmission(array $doctor, array $post, array $files): array
             if ($other === '') {
                 return [false, null, 'Please enter a custom indication for each product.', null];
             }
-            $indicationParts[] = $other;
+            $pName = $productLookup[(string)$pid] ?? '';
+            $indicationParts[] = ($pName !== '' ? $pName . ': ' : '') . $other;
         } else {
-            $indicationParts[] = $ind;
+            $pName = $productLookup[(string)$pid] ?? '';
+            $indicationParts[] = ($pName !== '' ? $pName . ': ' : '') . $ind;
         }
     }
     // Build a combined indication string for backward compatibility / PDF
-    $indication = implode('; ', array_unique($indicationParts));
+    $indication = implode("\n", $indicationParts);
     $indicationOther = '';
 
     // Override vocational_scope in post for saveDoctorPrefs
     $post['vocational_scope'] = $vocationalScope;
     saveDoctorPrefs((int)$doctor['id'], $post);
 
-    $selectedDetails = buildSelectedProductDetails($selectedProducts);
     $productNames = array_map(fn($p) => $p['name'], $selectedDetails);
 
     $id = 'sub-' . date('YmdHis') . '-' . substr(md5(uniqid('', true)), 0, 6);
@@ -614,12 +638,22 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     // ============================================================
     $p1 = [];
 
-    // MEDSAFE branding text (placeholder for logo image)
-    $p1[] = pdfFillColor($pR, $pG, $pB);
-    $p1[] = pdfBoldTextCommand('MEDSAFE', 48, $yt(30, 20), 20);
-    $p1[] = pdfFillColor(0.3, 0.3, 0.3);
-    $p1[] = pdfTextCommand('New Zealand Medicines and', 48, $yt(50, 7), 7);
-    $p1[] = pdfTextCommand('Medical Devices Safety Authority', 48, $yt(58, 7), 7);
+    // MEDSAFE logo image (will be embedded as XObject)
+    // Logo placement command - will be replaced with actual image in writeMultiPagePdf
+    $logoPath = __DIR__ . '/medsafe-logo.jpg';
+    $logoCmd = '';
+    if (file_exists($logoPath)) {
+        // Place logo at top-left, scaled to approximately 160x50
+        $logoCmd = "q\n160 0 0 50 48 " . number_format($pageH - 80, 2, '.', '') . " cm\n/LogoIm Do\nQ";
+        $p1[] = $logoCmd;
+    } else {
+        // Fallback to text if logo not available
+        $p1[] = pdfFillColor($pR, $pG, $pB);
+        $p1[] = pdfBoldTextCommand('MEDSAFE', 48, $yt(30, 20), 20);
+        $p1[] = pdfFillColor(0.3, 0.3, 0.3);
+        $p1[] = pdfTextCommand('New Zealand Medicines and', 48, $yt(50, 7), 7);
+        $p1[] = pdfTextCommand('Medical Devices Safety Authority', 48, $yt(58, 7), 7);
+    }
 
     // "Application Form" title (top-right)
     $p1[] = pdfFillColor($pR, $pG, $pB);
@@ -791,7 +825,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $p2[] = pdfRectCommand(47.83, $pageH - 355.5, 10, 10, false);
     if (!$hasScope) {
         $p2[] = pdfFillColor(0, 0, 0);
-        $p2[] = pdfBoldTextCommand('X', 49.5, $pageH - 353.5, 9);
+        $p2[] = pdfCheckmarkCommand(48.5, $pageH - 354.5, 10);
     }
     $p2[] = pdfFillColor(0, 0, 0);
     $p2[] = pdfTextCommand('No', 63.4, $yt(343.0, 10), 10);
@@ -800,7 +834,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $p2[] = pdfRectCommand(47.83, $pageH - 373.5, 10, 10, false);
     if ($hasScope) {
         $p2[] = pdfFillColor(0, 0, 0);
-        $p2[] = pdfBoldTextCommand('X', 49.5, $pageH - 371.5, 9);
+        $p2[] = pdfCheckmarkCommand(48.5, $pageH - 372.5, 10);
     }
     $p2[] = pdfFillColor(0, 0, 0);
     $p2[] = pdfTextCommand('Yes, please specify:', 63.1, $yt(361.0, 10), 10);
@@ -851,18 +885,6 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     // Question 2.1
     $p3[] = pdfTextCommand('2.1. This Application is being made to prescribe/supply/administer the following product(s):', $bodyMargin, $yt(68.3, 10), 10);
 
-    // Note accent bar (gray bg + purple left stripe)
-    $p3[] = pdfFillColor(0.882, 0.882, 0.882);
-    $p3[] = pdfFilledRect(36.0, $pageH - 117.0, 540.0, 27.0);
-    $p3[] = pdfFillColor($pR, $pG, $pB);
-    $p3[] = pdfFilledRect(27.0, $pageH - 117.0, 9.0, 27.0);
-    $p3[] = pdfFillColor(0, 0, 0);
-
-    // Note text
-    $p3[] = pdfBoldTextCommand('Note:', 37.4, $yt(91.2, 9), 9);
-    $p3[] = pdfTextCommand('For each product please provide supporting documentation to demonstrate it is pharmaceutical grade (including, for example, a', 62.9, $yt(91.3, 9), 9);
-    $p3[] = pdfTextCommand('certificate of analysis).', 37.4, $yt(102.1, 9), 9);
-
     // Product table - outer border
     $tableTop = 135.0;
     $tableBot = 437.66;
@@ -887,8 +909,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
 
     // Column headers
     $p3[] = pdfBoldTextCommand('Product', 46.4, $yt(141.5, 10), 10);
-    $p3[] = pdfBoldTextCommand('Component', 254.3, $yt(135.5, 10), 10);
-    $p3[] = pdfBoldTextCommand('(e.g. psilocybin)', 244.1, $yt(147.5, 10), 10);
+    $p3[] = pdfBoldTextCommand('Component', 254.3, $yt(141.5, 10), 10);
     $p3[] = pdfBoldTextCommand('Strength', 375.8, $yt(141.5, 10), 10);
     $p3[] = pdfBoldTextCommand('Form', 498.2, $yt(141.5, 10), 10);
 
@@ -961,44 +982,46 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     // 3.3 Treatment protocol
     $p4[] = pdfTextCommand('3.3. Provide a copy of the current treatment protocol.', $bodyMargin, $yt(235.5, 10), 10);
 
-    // Note accent bar
-    $p4[] = pdfFillColor(0.882, 0.882, 0.882);
-    $p4[] = pdfFilledRect(36.0, $pageH - 279.0, 540.0, 18.0);
-    $p4[] = pdfFillColor($pR, $pG, $pB);
-    $p4[] = pdfFilledRect(27.0, $pageH - 279.0, 9.0, 18.0);
-    $p4[] = pdfFillColor(0, 0, 0);
-
-    $p4[] = pdfBoldTextCommand('Note:', 37.4, $yt(263.1, 9), 9);
-    $p4[] = pdfTextCommand('Refer to the published guidance for details of the assessment criteria', 62.9, $yt(263.2, 9), 9);
-
     // 3.4 Administering location
     $p4[] = pdfTextCommand('3.4. Describe where you will be administering and monitoring the treatment:', $bodyMargin, $yt(307.5, 10), 10);
 
-    // Text box for evidence + protocol
-    $p4[] = pdfRectCommand(47.83, $pageH - 537.17, 573.17 - 47.83, 537.17 - 326.84, false);
+    // Supporting evidence text box
+    $p4[] = pdfBoldTextCommand('Supporting Evidence:', 47.83, $yt(326.0, 9), 9);
     $evText = (string)($form['supporting_evidence_notes'] ?? '');
-    $protText = (string)($form['treatment_protocol_notes'] ?? '');
-    $combinedText = '';
+    $evStartY = 340;
     if ($evText !== '') {
-        $combinedText .= 'Supporting Evidence: ' . $evText;
-    }
-    if ($protText !== '') {
-        if ($combinedText !== '') {
-            $combinedText .= ' | ';
-        }
-        $combinedText .= 'Treatment Protocol: ' . $protText;
-    }
-    if ($combinedText !== '') {
-        $combLines = pdfWordWrap($combinedText, 90);
-        $combY = 340;
-        foreach ($combLines as $cl) {
-            if ($combY > 530) {
+        $evLines = pdfWordWrap($evText, 90);
+        $evY = $evStartY;
+        foreach ($evLines as $el) {
+            if ($evY > 420) {
                 break;
             }
-            $p4[] = pdfTextCommand($cl, 52, $yt($combY, 9), 9);
-            $combY += 12;
+            $p4[] = pdfTextCommand($el, 52, $yt($evY, 9), 9);
+            $evY += 12;
+        }
+        $evStartY = $evY + 6;
+    } else {
+        $evStartY += 12;
+    }
+
+    // Treatment protocol text box
+    $p4[] = pdfBoldTextCommand('Treatment Protocol:', 47.83, $yt($evStartY, 9), 9);
+    $protText = (string)($form['treatment_protocol_notes'] ?? '');
+    $protStartY = $evStartY + 14;
+    if ($protText !== '') {
+        $protLines = pdfWordWrap($protText, 90);
+        $protY = $protStartY;
+        foreach ($protLines as $pl) {
+            if ($protY > 530) {
+                break;
+            }
+            $p4[] = pdfTextCommand($pl, 52, $yt($protY, 9), 9);
+            $protY += 12;
         }
     }
+
+    // Outer box encompassing both fields
+    $p4[] = pdfRectCommand(47.83, $pageH - 537.17, 573.17 - 47.83, 537.17 - 326.84, false);
 
     $p4[] = pdfMedsafeFooter(4, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
 
@@ -1013,16 +1036,6 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
 
     // 4.1 Question
     $p5[] = pdfTextCommand('4.1. Describe the scientific peer review activities that are implemented/proposed, and details of any support networks:', $bodyMargin, $yt(64.5, 10), 10);
-
-    // Note accent bar
-    $p5[] = pdfFillColor(0.882, 0.882, 0.882);
-    $p5[] = pdfFilledRect(36.0, $pageH - 108.0, 540.0, 18.0);
-    $p5[] = pdfFillColor($pR, $pG, $pB);
-    $p5[] = pdfFilledRect(27.0, $pageH - 108.0, 9.0, 18.0);
-    $p5[] = pdfFillColor(0, 0, 0);
-
-    $p5[] = pdfBoldTextCommand('Note:', 37.4, $yt(92.1, 9), 9);
-    $p5[] = pdfTextCommand('Please provide any applicable supporting documentation, for example completed peer reviews.', 62.9, $yt(92.2, 9), 9);
 
     // Large text box
     $p5[] = pdfRectCommand(47.83, $pageH - 726.17, 573.17 - 47.83, 726.17 - 119.84, false);
@@ -1075,18 +1088,6 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         $p6[] = pdfTextCommand($dateVal, 85.38, $yt(153, 10), 10);
     }
 
-    // Signature note bar
-    $p6[] = pdfFillColor(0.882, 0.882, 0.882);
-    $p6[] = pdfFilledRect(54.0, $pageH - 216.0, 513.0, 36.0);
-    $p6[] = pdfFillColor($pR, $pG, $pB);
-    $p6[] = pdfFilledRect(45.0, $pageH - 216.0, 9.0, 36.0);
-    $p6[] = pdfFillColor(0, 0, 0);
-
-    $p6[] = pdfBoldTextCommand('Note:', 55.4, $yt(180.3, 9), 9);
-    $p6[] = pdfTextCommand('To sign this document electronically apply a digital signature, or attach a signature image file, or use an on-screen signing', 80.9, $yt(180.4, 9), 9);
-    $p6[] = pdfTextCommand('function (for example \'Fill & Sign\' in Adobe Reader). If completing the signature electronically is not possible, print the form and', 55.4, $yt(191.2, 9), 9);
-    $p6[] = pdfTextCommand('sign in pen.', 55.4, $yt(202.0, 9), 9);
-
     // Signature method labels
     $p6[] = pdfBoldTextCommand('Digital Signature', 55.4, $yt(223.8, 10), 10);
     $p6[] = pdfFillColor(0, 0, 0);
@@ -1113,9 +1114,13 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $p6[] = pdfStrokeColor(0, 0, 0);
     $p6[] = pdfRectCommand(414.0, $sigBoxY, 153.0, $sigBoxH, false);
 
+    $sigUploadPath = (string)($form['signature_upload'] ?? '');
     if ($sigDrawn !== '') {
         $p6[] = pdfFillColor(0, 0, 0);
         $p6[] = pdfTextCommand('[Signature provided]', 420, $sigBoxY + 20, 9);
+    } elseif ($sigUploadPath !== '') {
+        $p6[] = pdfFillColor(0, 0, 0);
+        $p6[] = pdfTextCommand('[Signature provided]', 240, $sigBoxY + 20, 9);
     }
 
     $p6[] = pdfFillColor(0, 0, 0);
@@ -1130,7 +1135,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $streams[] = buildPdfPageStream([], $p5);
     $streams[] = buildPdfPageStream([], $p6);
 
-    return writeMultiPagePdf($path, $streams, $sigDrawn, $sigBoxY);
+    return writeMultiPagePdf($path, $streams, $sigDrawn, $sigBoxY, $sigUploadPath, $logoPath);
 }
 
 function buildSubmissionProductRows(array $submission): array
@@ -1174,10 +1179,9 @@ function buildSubmissionProductRows(array $submission): array
     return $rows;
 }
 
-function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y): bool
+function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y, string $signatureUploadPath = '', string $logoPath = ''): bool
 {
     $pageCount = count($streams);
-    $fontRes = '<< /F1 6 0 R /F2 10 0 R >>';
     $objects = [];
     $objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
 
@@ -1193,12 +1197,14 @@ function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn 
     $fontObjBase = 3 + $pageCount;
     $fontRegularId = $fontObjBase;
     $fontBoldId = $fontObjBase + 1;
+    $fontDingbatsId = $fontObjBase + 2;
     $objects[$fontRegularId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
     $objects[$fontBoldId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
-    $fontResStr = '<< /F1 ' . $fontRegularId . ' 0 R /F2 ' . $fontBoldId . ' 0 R >>';
+    $objects[$fontDingbatsId] = '<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>';
+    $fontResStr = '<< /F1 ' . $fontRegularId . ' 0 R /F2 ' . $fontBoldId . ' 0 R /F3 ' . $fontDingbatsId . ' 0 R >>';
 
     // Stream object IDs start after fonts
-    $streamObjBase = $fontObjBase + 2;
+    $streamObjBase = $fontObjBase + 3;
     for ($i = 0; $i < $pageCount; $i++) {
         $streamId = $streamObjBase + $i;
         $pageId = $pageObjIds[$i];
@@ -1206,17 +1212,44 @@ function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn 
         $objects[$streamId] = "<< /Length " . strlen($streams[$i]) . " >>\nstream\n" . $streams[$i] . "\nendstream";
     }
 
-    // Signature image on last page
+    $nextObjNum = $streamObjBase + $pageCount;
+
+    // Logo image on first page
+    $logoImage = null;
+    $logoObjNum = null;
+    if ($logoPath !== '' && file_exists($logoPath)) {
+        $logoImage = buildJpegObjectFromFile($logoPath);
+    }
+    if ($logoImage) {
+        $logoObjNum = $nextObjNum++;
+        $objects[$logoObjNum] = $logoImage['object'];
+        $firstPageId = $pageObjIds[0];
+        $firstStreamId = $streamObjBase;
+        $xobjects = '/LogoIm ' . $logoObjNum . ' 0 R';
+        $objects[$firstPageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font ' . $fontResStr . ' /XObject << ' . $xobjects . ' >> >> /Contents ' . $firstStreamId . ' 0 R >>';
+    }
+
+    // Signature image on last page (drawn or uploaded)
     $signatureImage = buildSignatureJpegObjectFromDataUrl($signatureDrawn);
+    if (!$signatureImage && $signatureUploadPath !== '') {
+        $sigFile = SUBMISSIONS_DIR . '/' . $signatureUploadPath;
+        if (file_exists($sigFile)) {
+            $signatureImage = buildJpegObjectFromFile($sigFile);
+        }
+    }
     if ($signatureImage) {
-        $imageObjNum = $streamObjBase + $pageCount;
+        $imageObjNum = $nextObjNum++;
         $objects[$imageObjNum] = $signatureImage['object'];
         $lastStreamIdx = $pageCount - 1;
         $lastStreamId = $streamObjBase + $lastStreamIdx;
         $lastPageId = $pageObjIds[$lastStreamIdx];
         $streams[$lastStreamIdx] .= "\nq\n153 0 0 54 414 " . number_format($sigBoxY, 2, '.', '') . " cm\n/SigIm Do\nQ\n";
         $objects[$lastStreamId] = "<< /Length " . strlen($streams[$lastStreamIdx]) . " >>\nstream\n" . $streams[$lastStreamIdx] . "\nendstream";
-        $objects[$lastPageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font ' . $fontResStr . ' /XObject << /SigIm ' . $imageObjNum . ' 0 R >> >> /Contents ' . $lastStreamId . ' 0 R >>';
+        $xobjects = '/SigIm ' . $imageObjNum . ' 0 R';
+        if ($logoObjNum !== null && $lastStreamIdx === 0) {
+            $xobjects .= ' /LogoIm ' . $logoObjNum . ' 0 R';
+        }
+        $objects[$lastPageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font ' . $fontResStr . ' /XObject << ' . $xobjects . ' >> >> /Contents ' . $lastStreamId . ' 0 R >>';
     }
 
     $pdf = buildPdfFromObjects($objects, 1);
@@ -1245,6 +1278,62 @@ function buildSignatureJpegObjectFromDataUrl(string $dataUrl): ?array
 
     $jpg = '';
     if (str_contains($meta, 'image/jpeg') || str_contains($meta, 'image/jpg')) {
+        $jpg = $binary;
+    } elseif (function_exists('imagecreatefromstring') && function_exists('imagejpeg') && function_exists('imagecreatetruecolor')) {
+        $img = @imagecreatefromstring($binary);
+        if ($img) {
+            if ($w < 1 || $h < 1) {
+                $w = imagesx($img);
+                $h = imagesy($img);
+            }
+            $flattened = imagecreatetruecolor($w, $h);
+            $white = imagecolorallocate($flattened, 255, 255, 255);
+            imagefilledrectangle($flattened, 0, 0, $w, $h, $white);
+            imagecopy($flattened, $img, 0, 0, 0, 0, $w, $h);
+            ob_start();
+            imagejpeg($flattened, null, 85);
+            $jpg = (string)ob_get_clean();
+            imagedestroy($flattened);
+            imagedestroy($img);
+        }
+    }
+
+    if ($jpg === '' || $w < 1 || $h < 1) {
+        return null;
+    }
+
+    $object = '<< /Type /XObject /Subtype /Image /Width ' . $w . ' /Height ' . $h . ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen($jpg) . " >>
+stream
+" . $jpg . "
+endstream";
+    return ['object' => $object];
+}
+
+function buildJpegObjectFromFile(string $filePath): ?array
+{
+    $realPath = realpath($filePath);
+    if ($realPath === false || !file_exists($realPath)) {
+        return null;
+    }
+
+    // Only allow files within the application directory
+    $appDir = realpath(__DIR__);
+    if ($appDir === false || strpos($realPath, $appDir) !== 0) {
+        return null;
+    }
+
+    $binary = file_get_contents($realPath);
+    if ($binary === false || $binary === '') {
+        return null;
+    }
+
+    $size = function_exists('getimagesizefromstring') ? @getimagesizefromstring($binary) : false;
+    $w = (int)($size[0] ?? 0);
+    $h = (int)($size[1] ?? 0);
+
+    $jpg = '';
+    $mime = $size['mime'] ?? '';
+    if ($mime === 'image/jpeg' || $mime === 'image/jpg') {
         $jpg = $binary;
     } elseif (function_exists('imagecreatefromstring') && function_exists('imagejpeg') && function_exists('imagecreatetruecolor')) {
         $img = @imagecreatefromstring($binary);
@@ -1319,6 +1408,8 @@ function pdfRectCommand(float $x, float $y, float $w, float $h, bool $fill = fal
 
 function pdfEscape(string $text): string
 {
+    // Convert UTF-8 bullet (U+2022) to WinAnsiEncoding bullet (0x95)
+    $text = str_replace("\xE2\x80\xA2", "\x95", $text);
     $text = preg_replace('/\s+/', ' ', trim($text)) ?? '';
     return str_replace(['\\', '(', ')'], ['\\\\', '\(', '\)'], $text);
 }
@@ -1326,6 +1417,12 @@ function pdfEscape(string $text): string
 function pdfBoldTextCommand(string $text, float $x, float $y, float $size = 10): string
 {
     return 'BT /F2 ' . number_format($size, 2, '.', '') . ' Tf 1 0 0 1 ' . number_format($x, 2, '.', '') . ' ' . number_format($y, 2, '.', '') . ' Tm (' . pdfEscape($text) . ') Tj ET';
+}
+
+function pdfCheckmarkCommand(float $x, float $y, float $size = 10): string
+{
+    // Character '4' in ZapfDingbats renders as a checkmark (✔)
+    return 'BT /F3 ' . number_format($size, 2, '.', '') . ' Tf 1 0 0 1 ' . number_format($x, 2, '.', '') . ' ' . number_format($y, 2, '.', '') . ' Tm (4) Tj ET';
 }
 
 function pdfFillColor(float $r, float $g, float $b): string
@@ -1397,21 +1494,30 @@ function pdfWordWrap(string $text, int $maxChars): array
     if ($text === '') {
         return [];
     }
-    $words = explode(' ', $text);
+    // Split on explicit newlines first to preserve line breaks
+    $paragraphs = preg_split('/\r\n|\r|\n/', $text);
     $lines = [];
-    $current = '';
-    foreach ($words as $word) {
-        if ($current === '') {
-            $current = $word;
-        } elseif (mb_strlen($current, 'UTF-8') + 1 + mb_strlen($word, 'UTF-8') <= $maxChars) {
-            $current .= ' ' . $word;
-        } else {
-            $lines[] = $current;
-            $current = $word;
+    foreach ($paragraphs as $paragraph) {
+        $paragraph = trim($paragraph);
+        if ($paragraph === '') {
+            $lines[] = '';
+            continue;
         }
-    }
-    if ($current !== '') {
-        $lines[] = $current;
+        $words = explode(' ', $paragraph);
+        $current = '';
+        foreach ($words as $word) {
+            if ($current === '') {
+                $current = $word;
+            } elseif (mb_strlen($current, 'UTF-8') + 1 + mb_strlen($word, 'UTF-8') <= $maxChars) {
+                $current .= ' ' . $word;
+            } else {
+                $lines[] = $current;
+                $current = $word;
+            }
+        }
+        if ($current !== '') {
+            $lines[] = $current;
+        }
     }
     return $lines;
 }
@@ -1661,9 +1767,6 @@ function emailPdfToDoctor(string $submissionId): array
           <label>First Name<input value="<?= htmlspecialchars($doctor['first_name']) ?>" readonly /></label>
           <label>Preferred Name<input value="<?= htmlspecialchars($doctor['preferred_name']) ?>" readonly /></label>
           <label>Surname<input value="<?= htmlspecialchars($doctor['surname']) ?>" readonly /></label>
-        </div>
-        <p style="font-weight:600;font-size:13px;margin:14px 0 4px;color:var(--text);">Contact Details</p>
-        <div class="grid two">
           <label>Email<input value="<?= htmlspecialchars($doctor['email']) ?>" readonly /></label>
           <label>Phone<input value="<?= htmlspecialchars($doctor['phone']) ?>" readonly /></label>
           <label>HPI-CPN<input value="<?= htmlspecialchars($doctor['cpn']) ?>" readonly /></label>
@@ -1693,7 +1796,7 @@ function emailPdfToDoctor(string $submissionId): array
 
         <fieldset class="product-picker">
           <legend>Products</legend>
-          <p class="hint">Tick one or more products. No Ctrl/Cmd key needed.</p>
+          <p class="hint">Select one or more products.</p>
           <div id="products" class="product-list" role="group" aria-label="Products">
             <?php foreach ($products as $p): ?>
               <label class="product-item">
@@ -1718,16 +1821,20 @@ function emailPdfToDoctor(string $submissionId): array
 
         <div class="grid two">
           <label>Component
-            <textarea id="componentAuto" readonly></textarea>
+            <div id="componentAutoDisplay" class="auto-display"></div>
+            <textarea id="componentAuto" class="hidden" readonly></textarea>
           </label>
           <label>Strength
-            <textarea id="strengthAuto" readonly></textarea>
+            <div id="strengthAutoDisplay" class="auto-display"></div>
+            <textarea id="strengthAuto" class="hidden" readonly></textarea>
           </label>
           <label>Form
-            <textarea id="formAuto" readonly></textarea>
+            <div id="formAutoDisplay" class="auto-display"></div>
+            <textarea id="formAuto" class="hidden" readonly></textarea>
           </label>
           <label>Sourced from
-            <textarea id="sourcingAuto" name="sourcing_notes"></textarea>
+            <div id="sourcingAutoDisplay" class="auto-display"></div>
+            <textarea id="sourcingAuto" name="sourcing_notes" class="hidden"></textarea>
           </label>
         </div>
 
@@ -1775,7 +1882,8 @@ function emailPdfToDoctor(string $submissionId): array
           </div>
 
           <div id="uploadWrap" class="hidden">
-            <input type="file" name="signature_upload" accept="image/*" />
+            <input type="file" name="signature_upload" accept="image/*" id="signatureUploadInput" />
+            <img id="signatureUploadPreview" style="display:none;max-width:500px;max-height:160px;margin-top:8px;border:1px solid #cdd7e5;border-radius:10px;" alt="Signature preview" />
           </div>
         </fieldset>
       </section>
@@ -1822,19 +1930,38 @@ const decodeJsonData = (value, fallback = []) => {
   try { return JSON.parse(value || '[]'); } catch (e) { return fallback; }
 };
 
+const escapeHtml = (str) => {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+};
+
+function buildAutoDisplayHtml(selected, field) {
+  return selected.map(o => {
+    const name = escapeHtml(o.dataset.name || '');
+    const val = escapeHtml(o.dataset[field] || '-');
+    return `<div><span class="auto-product-name">${name}:</span> <span class="auto-product-value">${val}</span></div>`;
+  }).join('');
+}
+
 function syncProductAuto() {
   if (!productWrap) return;
   const selected = [...document.querySelectorAll('.product-check:checked')];
 
-  const components = selected.map(o => `• ${o.dataset.name}: ${o.dataset.component || '-'}`).join('\n');
-  const strengths = selected.map(o => `• ${o.dataset.name}: ${o.dataset.strength || '-'}`).join('\n');
-  const forms = selected.map(o => `• ${o.dataset.name}: ${o.dataset.form || '-'}`).join('\n');
-  const sources = selected.map(o => `• ${o.dataset.name}: ${o.dataset.source || '-'}`).join('\n');
+  const components = selected.map(o => `\u2022 ${o.dataset.name}: ${o.dataset.component || '-'}`).join('\n');
+  const strengths = selected.map(o => `\u2022 ${o.dataset.name}: ${o.dataset.strength || '-'}`).join('\n');
+  const forms = selected.map(o => `\u2022 ${o.dataset.name}: ${o.dataset.form || '-'}`).join('\n');
+  const sources = selected.map(o => `\u2022 ${o.dataset.name}: ${o.dataset.source || '-'}`).join('\n');
 
   document.getElementById('componentAuto').value = components;
   document.getElementById('strengthAuto').value = strengths;
   document.getElementById('formAuto').value = forms;
   document.getElementById('sourcingAuto').value = sources;
+
+  document.getElementById('componentAutoDisplay').innerHTML = buildAutoDisplayHtml(selected, 'component');
+  document.getElementById('strengthAutoDisplay').innerHTML = buildAutoDisplayHtml(selected, 'strength');
+  document.getElementById('formAutoDisplay').innerHTML = buildAutoDisplayHtml(selected, 'form');
+  document.getElementById('sourcingAutoDisplay').innerHTML = buildAutoDisplayHtml(selected, 'source');
 
   // Build per-product indication dropdowns
   if (productIndicationsContainer) {
@@ -2050,6 +2177,25 @@ if (canvas) {
   document.getElementById('clearSig').addEventListener('click', () => {
     resetSignatureCanvas();
     document.getElementById('signatureDrawn').value = '';
+  });
+}
+
+const sigUploadInput = document.getElementById('signatureUploadInput');
+const sigUploadPreview = document.getElementById('signatureUploadPreview');
+if (sigUploadInput && sigUploadPreview) {
+  sigUploadInput.addEventListener('change', () => {
+    const file = sigUploadInput.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        sigUploadPreview.src = e.target.result;
+        sigUploadPreview.style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    } else {
+      sigUploadPreview.style.display = 'none';
+      sigUploadPreview.src = '';
+    }
   });
 }
 </script>
