@@ -15,6 +15,8 @@ const PDF_DEFAULT_SIGNATURE_Y = 536;
 const PDF_LABEL_VALUE_OFFSET = 120;
 /** @var int Total number of pages in the generated PDF. */
 const PDF_TOTAL_PAGES = 6;
+/** @var float Approximate character width multiplier for Helvetica/Helvetica-Bold at a given font size. */
+const PDF_CHAR_WIDTH_FACTOR = 0.55;
 /** @var float Medsafe purple red component (#573F7F). */
 const MEDSAFE_PURPLE_R = 0.341;
 /** @var float Medsafe purple green component (#573F7F). */
@@ -133,10 +135,10 @@ function renderCpnUserField($user): void
     $preferredName = get_user_meta($user->ID, 'preferred_name', true);
     echo '<h2>Prescription Form Fields</h2>';
     echo '<table class="form-table">';
-    echo '<tr><th><label for="ai_form_title">Title</label></th>';
-    echo '<td><input type="text" name="title" id="ai_form_title" value="' . esc_attr($title) . '" class="regular-text" /></td></tr>';
-    echo '<tr><th><label for="ai_form_preferred_name">Preferred Name</label></th>';
-    echo '<td><input type="text" name="preferred_name" id="ai_form_preferred_name" value="' . esc_attr($preferredName) . '" class="regular-text" /></td></tr>';
+    echo '<tr><th><label for="allu_form_title">Title</label></th>';
+    echo '<td><input type="text" name="title" id="allu_form_title" value="' . esc_attr($title) . '" class="regular-text" /></td></tr>';
+    echo '<tr><th><label for="allu_form_preferred_name">Preferred Name</label></th>';
+    echo '<td><input type="text" name="preferred_name" id="allu_form_preferred_name" value="' . esc_attr($preferredName) . '" class="regular-text" /></td></tr>';
     echo '<tr><th><label for="cpn">CPN</label></th>';
     echo '<td><input type="text" name="cpn" id="cpn" value="' . esc_attr($cpn) . '" class="regular-text" /></td></tr>';
     echo '</table>';
@@ -574,6 +576,7 @@ function saveSubmission(array $doctor, array $post, array $files): array
             'supporting_evidence_notes' => trim($post['supporting_evidence_notes'] ?? ''),
             'treatment_protocol_notes' => trim($post['treatment_protocol_notes'] ?? ''),
             'scientific_peer_review_notes' => trim($post['scientific_peer_review_notes'] ?? ''),
+            'admin_monitoring_notes' => trim($post['admin_monitoring_notes'] ?? ''),
             'date' => trim($post['application_date'] ?? date('Y-m-d')),
             'signature_mode' => $signatureMode,
             'signature_drawn' => $signatureDrawn,
@@ -616,6 +619,9 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
         $indication .= ' - ' . $other;
     }
 
+    // Collect URL annotations per page: pageIndex => [[url, x, y, w, h], ...]
+    $pageAnnotations = array_fill(0, PDF_TOTAL_PAGES, []);
+
     // Page dimensions (A4: 595.28 x 841.89)
     $pageW = 595.28;
     $pageH = 841.89;
@@ -644,7 +650,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $logoCmd = '';
     if (file_exists($logoPath)) {
         // Place logo at top-left, scaled to approximately 160x50
-        $logoCmd = "q\n160 0 0 50 48 " . number_format($pageH - 80, 2, '.', '') . " cm\n/LogoIm Do\nQ";
+        $logoCmd = "q\n160 0 0 50 18 " . number_format($pageH - 80, 2, '.', '') . " cm\n/LogoIm Do\nQ";
         $p1[] = $logoCmd;
     } else {
         // Fallback to text if logo not available
@@ -948,7 +954,10 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
             if ($srcY > 790) {
                 break;
             }
-            $p3[] = pdfTextCommand($sl, 52, $yt($srcY, 9), 9);
+            $cmds = pdfRichTextLine($sl, 52, $yt($srcY, 9), 9);
+            foreach ($cmds as $cmd) {
+                $p3[] = $cmd;
+            }
             $srcY += 12;
         }
     }
@@ -978,50 +987,74 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
 
     // 3.2 Supporting evidence
     $p4[] = pdfTextCommand('3.2. Provide supporting evidence/information to support use of the product(s) for the intended indication.', $bodyMargin, $yt(199.5, 10), 10);
-
-    // 3.3 Treatment protocol
-    $p4[] = pdfTextCommand('3.3. Provide a copy of the current treatment protocol.', $bodyMargin, $yt(235.5, 10), 10);
-
-    // 3.4 Administering location
-    $p4[] = pdfTextCommand('3.4. Describe where you will be administering and monitoring the treatment:', $bodyMargin, $yt(307.5, 10), 10);
-
-    // Supporting evidence text box
-    $p4[] = pdfBoldTextCommand('Supporting Evidence:', 47.83, $yt(326.0, 9), 9);
+    $p4[] = pdfStrokeColor(0, 0, 0);
+    $p4[] = '0.50 w';
+    $p4[] = pdfRectCommand(47.83, $pageH - 310.17, 573.17 - 47.83, 310.17 - 218.84, false);
     $evText = (string)($form['supporting_evidence_notes'] ?? '');
-    $evStartY = 340;
     if ($evText !== '') {
         $evLines = pdfWordWrap($evText, 90);
-        $evY = $evStartY;
+        $evY = 230;
         foreach ($evLines as $el) {
-            if ($evY > 420) {
+            if ($evY > 302) {
                 break;
             }
-            $p4[] = pdfTextCommand($el, 52, $yt($evY, 9), 9);
+            $cmds = pdfRichTextLine($el, 52, $yt($evY, 9), 9);
+            foreach ($cmds as $cmd) {
+                $p4[] = $cmd;
+            }
+            $urlAnnots = pdfDetectUrlAnnotations($el, 52, $yt($evY, 9), 9, $pageH);
+            foreach ($urlAnnots as $ua) {
+                $pageAnnotations[3][] = $ua;
+            }
             $evY += 12;
         }
-        $evStartY = $evY + 6;
-    } else {
-        $evStartY += 12;
     }
 
-    // Treatment protocol text box
-    $p4[] = pdfBoldTextCommand('Treatment Protocol:', 47.83, $yt($evStartY, 9), 9);
+    // 3.3 Treatment protocol
+    $p4[] = pdfTextCommand('3.3. Provide a copy of the current treatment protocol.', $bodyMargin, $yt(332.5, 10), 10);
+    $p4[] = pdfRectCommand(47.83, $pageH - 443.17, 573.17 - 47.83, 443.17 - 351.84, false);
     $protText = (string)($form['treatment_protocol_notes'] ?? '');
-    $protStartY = $evStartY + 14;
     if ($protText !== '') {
         $protLines = pdfWordWrap($protText, 90);
-        $protY = $protStartY;
+        $protY = 363;
         foreach ($protLines as $pl) {
-            if ($protY > 530) {
+            if ($protY > 435) {
                 break;
             }
-            $p4[] = pdfTextCommand($pl, 52, $yt($protY, 9), 9);
+            $cmds = pdfRichTextLine($pl, 52, $yt($protY, 9), 9);
+            foreach ($cmds as $cmd) {
+                $p4[] = $cmd;
+            }
+            $urlAnnots = pdfDetectUrlAnnotations($pl, 52, $yt($protY, 9), 9, $pageH);
+            foreach ($urlAnnots as $ua) {
+                $pageAnnotations[3][] = $ua;
+            }
             $protY += 12;
         }
     }
 
-    // Outer box encompassing both fields
-    $p4[] = pdfRectCommand(47.83, $pageH - 537.17, 573.17 - 47.83, 537.17 - 326.84, false);
+    // 3.4 Administering location
+    $p4[] = pdfTextCommand('3.4. Describe where you will be administering and monitoring the treatment:', $bodyMargin, $yt(465.5, 10), 10);
+    $p4[] = pdfRectCommand(47.83, $pageH - 798.17, 573.17 - 47.83, 798.17 - 484.84, false);
+    $adminText = (string)($form['admin_monitoring_notes'] ?? '');
+    if ($adminText !== '') {
+        $adminLines = pdfWordWrap($adminText, 90);
+        $adminY = 496;
+        foreach ($adminLines as $al) {
+            if ($adminY > 790) {
+                break;
+            }
+            $cmds = pdfRichTextLine($al, 52, $yt($adminY, 9), 9);
+            foreach ($cmds as $cmd) {
+                $p4[] = $cmd;
+            }
+            $urlAnnots = pdfDetectUrlAnnotations($al, 52, $yt($adminY, 9), 9, $pageH);
+            foreach ($urlAnnots as $ua) {
+                $pageAnnotations[3][] = $ua;
+            }
+            $adminY += 12;
+        }
+    }
 
     $p4[] = pdfMedsafeFooter(4, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
 
@@ -1047,7 +1080,14 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
             if ($prY > 718) {
                 break;
             }
-            $p5[] = pdfTextCommand($pl, 52, $yt($prY, 9), 9);
+            $cmds = pdfRichTextLine($pl, 52, $yt($prY, 9), 9);
+            foreach ($cmds as $cmd) {
+                $p5[] = $cmd;
+            }
+            $urlAnnots = pdfDetectUrlAnnotations($pl, 52, $yt($prY, 9), 9, $pageH);
+            foreach ($urlAnnots as $ua) {
+                $pageAnnotations[4][] = $ua;
+            }
             $prY += 12;
         }
     }
@@ -1135,7 +1175,7 @@ function generateSubmissionPdfFromScratch(array $submission, string $path): bool
     $streams[] = buildPdfPageStream([], $p5);
     $streams[] = buildPdfPageStream([], $p6);
 
-    return writeMultiPagePdf($path, $streams, $sigDrawn, $sigBoxY, $sigUploadPath, $logoPath);
+    return writeMultiPagePdf($path, $streams, $sigDrawn, $sigBoxY, $sigUploadPath, $logoPath, $pageAnnotations);
 }
 
 function buildSubmissionProductRows(array $submission): array
@@ -1179,7 +1219,7 @@ function buildSubmissionProductRows(array $submission): array
     return $rows;
 }
 
-function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y, string $signatureUploadPath = '', string $logoPath = ''): bool
+function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn = '', float $sigBoxY = PDF_DEFAULT_SIGNATURE_Y, string $signatureUploadPath = '', string $logoPath = '', array $pageAnnotations = []): bool
 {
     $pageCount = count($streams);
     $objects = [];
@@ -1231,10 +1271,12 @@ function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn 
 
     // Signature image on last page (drawn or uploaded)
     $signatureImage = buildSignatureJpegObjectFromDataUrl($signatureDrawn);
+    $sigIsUploaded = false;
     if (!$signatureImage && $signatureUploadPath !== '') {
         $sigFile = SUBMISSIONS_DIR . '/' . $signatureUploadPath;
         if (file_exists($sigFile)) {
             $signatureImage = buildJpegObjectFromFile($sigFile);
+            $sigIsUploaded = true;
         }
     }
     if ($signatureImage) {
@@ -1243,13 +1285,40 @@ function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn 
         $lastStreamIdx = $pageCount - 1;
         $lastStreamId = $streamObjBase + $lastStreamIdx;
         $lastPageId = $pageObjIds[$lastStreamIdx];
-        $streams[$lastStreamIdx] .= "\nq\n153 0 0 54 414 " . number_format($sigBoxY, 2, '.', '') . " cm\n/SigIm Do\nQ\n";
+        $sigImgX = $sigIsUploaded ? 234 : 414;
+        $streams[$lastStreamIdx] .= "\nq\n153 0 0 54 " . $sigImgX . " " . number_format($sigBoxY, 2, '.', '') . " cm\n/SigIm Do\nQ\n";
         $objects[$lastStreamId] = "<< /Length " . strlen($streams[$lastStreamIdx]) . " >>\nstream\n" . $streams[$lastStreamIdx] . "\nendstream";
         $xobjects = '/SigIm ' . $imageObjNum . ' 0 R';
         if ($logoObjNum !== null && $lastStreamIdx === 0) {
             $xobjects .= ' /LogoIm ' . $logoObjNum . ' 0 R';
         }
         $objects[$lastPageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font ' . $fontResStr . ' /XObject << ' . $xobjects . ' >> >> /Contents ' . $lastStreamId . ' 0 R >>';
+    }
+
+    // Add URL link annotations to pages
+    foreach ($pageAnnotations as $pageIdx => $annots) {
+        if (empty($annots) || !isset($pageObjIds[$pageIdx])) {
+            continue;
+        }
+        $annotObjIds = [];
+        foreach ($annots as $annot) {
+            [$url, $ax, $ay, $aw, $ah] = $annot;
+            $annotId = $nextObjNum++;
+            $x1 = number_format($ax, 2, '.', '');
+            $y1 = number_format($ay, 2, '.', '');
+            $x2 = number_format($ax + $aw, 2, '.', '');
+            $y2 = number_format($ay + $ah, 2, '.', '');
+            $objects[$annotId] = '<< /Type /Annot /Subtype /Link /Rect [' . $x1 . ' ' . $y1 . ' ' . $x2 . ' ' . $y2 . '] /Border [0 0 0] /A << /S /URI /URI (' . pdfEscape($url) . ') >> >>';
+            $annotObjIds[] = $annotId . ' 0 R';
+        }
+        $pageId = $pageObjIds[$pageIdx];
+        $existingPage = $objects[$pageId];
+        // Inject /Annots before the final closing >>
+        $annotsStr = ' /Annots [' . implode(' ', $annotObjIds) . ']';
+        $lastClose = strrpos($existingPage, '>>');
+        if ($lastClose !== false) {
+            $objects[$pageId] = substr($existingPage, 0, $lastClose) . $annotsStr . ' >>';
+        }
     }
 
     $pdf = buildPdfFromObjects($objects, 1);
@@ -1520,6 +1589,52 @@ function pdfWordWrap(string $text, int $maxChars): array
         }
     }
     return $lines;
+}
+
+/**
+ * Render a single line with bold product-name prefix (bullet lines like "• Name: text")
+ * and plain text for the rest.
+ */
+function pdfRichTextLine(string $line, float $x, float $y, float $size): array
+{
+    $commands = [];
+    // Detect bullet-prefixed product lines: "• ProductName: rest of text"
+    if (preg_match('/^(\x{2022}|\x{95}|•)\s*(.+?):\s*(.*)$/u', $line, $m)) {
+        $boldPart = $m[1] . ' ' . $m[2] . ':';
+        $plainPart = ' ' . $m[3];
+        $commands[] = pdfBoldTextCommand($boldPart, $x, $y, $size);
+        $boldWidth = mb_strlen($boldPart, 'UTF-8') * $size * PDF_CHAR_WIDTH_FACTOR;
+        if (trim($m[3]) !== '') {
+            $commands[] = pdfTextCommand(trim($plainPart), $x + $boldWidth, $y, $size);
+        }
+    } else {
+        $commands[] = pdfTextCommand($line, $x, $y, $size);
+    }
+    return $commands;
+}
+
+/**
+ * Detect URLs in a text line and return annotation rects for PDF link annotations.
+ * Returns array of [url, linkX, linkY, linkW, linkH].
+ */
+function pdfDetectUrlAnnotations(string $line, float $x, float $y, float $size, float $pageHeight): array
+{
+    $annotations = [];
+    $charWidth = $size * PDF_CHAR_WIDTH_FACTOR;
+    // Match http/https URLs terminated by whitespace, closing paren/bracket, or >
+    if (preg_match_all('#https?://[^\s)\]>]+#i', $line, $matches, PREG_OFFSET_CAPTURE)) {
+        foreach ($matches[0] as $match) {
+            $url = $match[0];
+            $offset = $match[1];
+            $prefix = substr($line, 0, $offset);
+            $linkX = $x + mb_strlen($prefix, 'UTF-8') * $charWidth;
+            $linkW = mb_strlen($url, 'UTF-8') * $charWidth;
+            $linkY = $y - 2;
+            $linkH = $size + 4;
+            $annotations[] = [$url, $linkX, $linkY, $linkW, $linkH];
+        }
+    }
+    return $annotations;
 }
 
 function buildPdfFromObjects(array $objects, int $rootObj): string
@@ -1858,6 +1973,10 @@ function emailPdfToDoctor(string $submissionId): array
 
         <label>Scientific Peer Review
           <textarea id="peerReviewAuto" name="scientific_peer_review_notes"></textarea>
+        </label>
+
+        <label>Admin &amp; Monitoring
+          <textarea id="adminMonitoringNotes" name="admin_monitoring_notes" placeholder="Describe where you will be administering and monitoring the treatment"></textarea>
         </label>
 
       </section>
