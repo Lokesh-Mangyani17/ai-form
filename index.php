@@ -1216,6 +1216,7 @@ function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn 
 
     // Logo image on first page
     $logoImage = null;
+    $logoObjNum = null;
     if ($logoPath !== '' && file_exists($logoPath)) {
         $logoImage = buildJpegObjectFromFile($logoPath);
     }
@@ -1245,9 +1246,8 @@ function writeMultiPagePdf(string $path, array $streams, string $signatureDrawn 
         $streams[$lastStreamIdx] .= "\nq\n153 0 0 54 414 " . number_format($sigBoxY, 2, '.', '') . " cm\n/SigIm Do\nQ\n";
         $objects[$lastStreamId] = "<< /Length " . strlen($streams[$lastStreamIdx]) . " >>\nstream\n" . $streams[$lastStreamIdx] . "\nendstream";
         $xobjects = '/SigIm ' . $imageObjNum . ' 0 R';
-        // Check if logo is also on last page (only if it's page 1, which would mean single page)
-        if ($logoImage && $lastStreamIdx === 0) {
-            $xobjects .= ' /LogoIm ' . ($imageObjNum - 1) . ' 0 R';
+        if ($logoObjNum !== null && $lastStreamIdx === 0) {
+            $xobjects .= ' /LogoIm ' . $logoObjNum . ' 0 R';
         }
         $objects[$lastPageId] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font ' . $fontResStr . ' /XObject << ' . $xobjects . ' >> >> /Contents ' . $lastStreamId . ' 0 R >>';
     }
@@ -1414,6 +1414,7 @@ function pdfBoldTextCommand(string $text, float $x, float $y, float $size = 10):
 
 function pdfCheckmarkCommand(float $x, float $y, float $size = 10): string
 {
+    // Character '4' in ZapfDingbats renders as a checkmark (✔)
     return 'BT /F3 ' . number_format($size, 2, '.', '') . ' Tf 1 0 0 1 ' . number_format($x, 2, '.', '') . ' ' . number_format($y, 2, '.', '') . ' Tm (4) Tj ET';
 }
 
