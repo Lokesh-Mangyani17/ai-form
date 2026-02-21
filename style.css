@@ -222,3 +222,17 @@ tbody td { border-bottom: 1px solid #e2e8f0; padding: 10px; vertical-align: top;
   color: var(--primary-dark);
   border: 1px solid #c7d2fe;
 }
+
+#clearSig {
+  background: #fff;
+  color: var(--muted);
+  border: 1px solid #cdd7e5;
+  font-weight: 400;
+  font-size: 13px;
+  padding: 6px 12px;
+  margin-top: 6px;
+}
+#clearSig:hover {
+  background: #f1f5f9;
+  color: var(--text);
+}
