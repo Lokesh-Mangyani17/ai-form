@@ -4,8 +4,7 @@ bootstrapWordPressRuntimeIfAvailable();
 
 define('DATA_DIR', __DIR__ . '/data');
 define('SUBMISSIONS_DIR', DATA_DIR . '/submissions');
-define('PRODUCTS_FILE', DATA_DIR . '/products.json');
-define('DOCTOR_PREFS_FILE', DATA_DIR . '/doctor_prefs.json');
+define('SQLITE_DB_FILE', DATA_DIR . '/store.db');
 define('PDF_TEMPLATE_FILE', DATA_DIR . '/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_TEMPLATE_URL', 'https://www.medsafe.govt.nz/downloads/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
@@ -270,6 +269,17 @@ function getDoctorProfile(): array
     ];
 }
 
+function getSqliteDb(): PDO
+{
+    static $db = null;
+    if ($db === null) {
+        $db = new PDO('sqlite:' . SQLITE_DB_FILE);
+        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $db->exec('PRAGMA journal_mode=WAL');
+    }
+    return $db;
+}
+
 function bootstrapStorage(): void
 {
     if (!is_dir(DATA_DIR)) {
@@ -278,17 +288,79 @@ function bootstrapStorage(): void
     if (!is_dir(SUBMISSIONS_DIR)) {
         mkdir(SUBMISSIONS_DIR, 0777, true);
     }
-    if (!file_exists(PRODUCTS_FILE)) {
-        $seed = [
-            ['id' => 'prd-001', 'name' => 'Psilocybin Oral Capsule', 'component' => 'Psilocybin', 'strength' => '25mg', 'form' => 'Capsule', 'source' => 'Medsafe-approved compounding supplier, NZ', 'indications' => ['Depression'], 'indication_map' => ['Depression' => ['supporting_evidence' => 'Default supporting evidence', 'treatment_protocol' => 'Default treatment protocol', 'scientific_peer_review' => 'Default peer review']]],
-        ];
-        file_put_contents(PRODUCTS_FILE, json_encode($seed, JSON_PRETTY_PRINT));
-    }
-    if (!file_exists(DOCTOR_PREFS_FILE)) {
-        file_put_contents(DOCTOR_PREFS_FILE, json_encode([], JSON_PRETTY_PRINT));
+
+    if (isWordPressRuntime()) {
+        bootstrapWordPressTables();
+    } else {
+        bootstrapSqliteTables();
     }
 
     ensurePdfTemplate();
+}
+
+function bootstrapWordPressTables(): void
+{
+    global $wpdb;
+    $table = $wpdb->prefix . 'allu_submissions';
+    $charset = $wpdb->get_charset_collate();
+
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) {
+        $wpdb->query("CREATE TABLE {$table} (
+            id VARCHAR(255) NOT NULL,
+            submitted_at DATETIME NOT NULL,
+            doctor_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            data LONGTEXT NOT NULL,
+            pdf_file VARCHAR(255) NOT NULL DEFAULT '',
+            PRIMARY KEY (id),
+            KEY doctor_id (doctor_id),
+            KEY submitted_at (submitted_at)
+        ) {$charset}");
+    }
+}
+
+function bootstrapSqliteTables(): void
+{
+    $db = getSqliteDb();
+
+    $db->exec('CREATE TABLE IF NOT EXISTS products (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        component TEXT NOT NULL DEFAULT "",
+        strength TEXT NOT NULL DEFAULT "",
+        form TEXT NOT NULL DEFAULT "",
+        source TEXT NOT NULL DEFAULT "",
+        indications TEXT NOT NULL DEFAULT "[]",
+        indication_map TEXT NOT NULL DEFAULT "{}"
+    )');
+
+    $db->exec('CREATE TABLE IF NOT EXISTS doctor_prefs (
+        doctor_id INTEGER PRIMARY KEY,
+        vocational_scope TEXT NOT NULL DEFAULT "",
+        clinical_experience TEXT NOT NULL DEFAULT ""
+    )');
+
+    $db->exec('CREATE TABLE IF NOT EXISTS submissions (
+        id TEXT PRIMARY KEY,
+        submitted_at TEXT NOT NULL,
+        doctor_id INTEGER NOT NULL DEFAULT 0,
+        data TEXT NOT NULL,
+        pdf_file TEXT NOT NULL DEFAULT ""
+    )');
+
+    $count = $db->query('SELECT COUNT(*) FROM products')->fetchColumn();
+    if ((int)$count === 0) {
+        $stmt = $db->prepare('INSERT OR IGNORE INTO products (id, name, component, strength, form, source, indications, indication_map) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([
+            'prd-001',
+            'Psilocybin Oral Capsule',
+            'Psilocybin',
+            '25mg',
+            'Capsule',
+            'Medsafe-approved compounding supplier, NZ',
+            json_encode(['Depression']),
+            json_encode(['Depression' => ['supporting_evidence' => 'Default supporting evidence', 'treatment_protocol' => 'Default treatment protocol', 'scientific_peer_review' => 'Default peer review']]),
+        ]);
+    }
 }
 
 function ensurePdfTemplate(): void
@@ -392,7 +464,20 @@ function getProducts(): array
         return $mapped;
     }
 
-    return json_decode(file_get_contents(PRODUCTS_FILE), true) ?: [];
+    $db = getSqliteDb();
+    $rows = $db->query('SELECT * FROM products')->fetchAll(PDO::FETCH_ASSOC);
+    return array_map(function ($row) {
+        return [
+            'id' => $row['id'],
+            'name' => $row['name'],
+            'component' => $row['component'],
+            'strength' => $row['strength'],
+            'form' => $row['form'],
+            'source' => $row['source'],
+            'indications' => json_decode($row['indications'], true) ?: [],
+            'indication_map' => json_decode($row['indication_map'], true) ?: [],
+        ];
+    }, $rows);
 }
 
 function saveProduct(array $data): array
@@ -402,9 +487,9 @@ function saveProduct(array $data): array
         return [false, null, 'Product name is required.'];
     }
 
-    $products = getProducts();
-    $products[] = [
-        'id' => 'prd-' . substr(md5(uniqid('', true)), 0, 8),
+    $id = 'prd-' . substr(md5(uniqid('', true)), 0, 8);
+    $product = [
+        'id' => $id,
         'name' => $name,
         'component' => trim($data['component'] ?? ''),
         'strength' => trim($data['strength'] ?? ''),
@@ -413,7 +498,19 @@ function saveProduct(array $data): array
         'indications' => array_values(array_filter(array_map('trim', explode(',', (string)($data['indications'] ?? ''))))),
         'indication_map' => buildIndicationMapFromInputs($data),
     ];
-    file_put_contents(PRODUCTS_FILE, json_encode($products, JSON_PRETTY_PRINT));
+
+    $db = getSqliteDb();
+    $stmt = $db->prepare('INSERT INTO products (id, name, component, strength, form, source, indications, indication_map) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([
+        $product['id'],
+        $product['name'],
+        $product['component'],
+        $product['strength'],
+        $product['form'],
+        $product['source'],
+        json_encode($product['indications']),
+        json_encode($product['indication_map']),
+    ]);
     return [true, 'Product added successfully.', null];
 }
 
@@ -422,37 +519,73 @@ function deleteProduct(string $id): array
     if ($id === '') {
         return [false, null, 'Missing product id.'];
     }
-    $products = array_values(array_filter(getProducts(), fn($p) => ($p['id'] ?? '') !== $id));
-    file_put_contents(PRODUCTS_FILE, json_encode($products, JSON_PRETTY_PRINT));
+    $db = getSqliteDb();
+    $stmt = $db->prepare('DELETE FROM products WHERE id = ?');
+    $stmt->execute([$id]);
     return [true, 'Product deleted.', null];
 }
 
 function getDoctorPrefs(int $doctorId): array
 {
-    $prefs = json_decode(file_get_contents(DOCTOR_PREFS_FILE), true) ?: [];
-    return $prefs[$doctorId] ?? ['vocational_scope' => '', 'clinical_experience' => ''];
+    if (isWordPressRuntime() && function_exists('get_user_meta')) {
+        return [
+            'vocational_scope' => (string)get_user_meta($doctorId, 'allu_vocational_scope', true),
+            'clinical_experience' => (string)get_user_meta($doctorId, 'allu_clinical_experience', true),
+        ];
+    }
+
+    $db = getSqliteDb();
+    $stmt = $db->prepare('SELECT vocational_scope, clinical_experience FROM doctor_prefs WHERE doctor_id = ?');
+    $stmt->execute([$doctorId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) {
+        return ['vocational_scope' => $row['vocational_scope'], 'clinical_experience' => $row['clinical_experience']];
+    }
+    return ['vocational_scope' => '', 'clinical_experience' => ''];
 }
 
 function saveDoctorPrefs(int $doctorId, array $payload): void
 {
-    $prefs = json_decode(file_get_contents(DOCTOR_PREFS_FILE), true) ?: [];
-    $prefs[$doctorId] = [
-        'vocational_scope' => trim($payload['vocational_scope'] ?? ''),
-        'clinical_experience' => trim($payload['clinical_experience'] ?? ''),
-    ];
-    file_put_contents(DOCTOR_PREFS_FILE, json_encode($prefs, JSON_PRETTY_PRINT));
+    $vocationalScope = trim($payload['vocational_scope'] ?? '');
+    $clinicalExperience = trim($payload['clinical_experience'] ?? '');
+
+    if (isWordPressRuntime() && function_exists('update_user_meta')) {
+        update_user_meta($doctorId, 'allu_vocational_scope', $vocationalScope);
+        update_user_meta($doctorId, 'allu_clinical_experience', $clinicalExperience);
+        return;
+    }
+
+    $db = getSqliteDb();
+    $stmt = $db->prepare('INSERT INTO doctor_prefs (doctor_id, vocational_scope, clinical_experience) VALUES (?, ?, ?)
+        ON CONFLICT(doctor_id) DO UPDATE SET vocational_scope = excluded.vocational_scope, clinical_experience = excluded.clinical_experience');
+    $stmt->execute([$doctorId, $vocationalScope, $clinicalExperience]);
 }
 
 function getSubmissions(): array
 {
+    if (isWordPressRuntime()) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'allu_submissions';
+        $rows = $wpdb->get_results("SELECT data FROM {$table} ORDER BY submitted_at DESC", ARRAY_A);
+        $records = [];
+        foreach ($rows as $row) {
+            $entry = json_decode($row['data'], true);
+            if ($entry) {
+                $records[] = $entry;
+            }
+        }
+        return $records;
+    }
+
+    $db = getSqliteDb();
+    $rows = $db->query('SELECT data FROM submissions ORDER BY submitted_at DESC')->fetchAll(PDO::FETCH_ASSOC);
     $records = [];
-    foreach (glob(SUBMISSIONS_DIR . '/*.json') as $file) {
-        $entry = json_decode(file_get_contents($file), true);
+    foreach ($rows as $row) {
+        $entry = json_decode($row['data'], true);
         if ($entry) {
             $records[] = $entry;
         }
     }
-    usort($records, fn($a, $b) => strcmp($b['submitted_at'], $a['submitted_at']));
     return $records;
 }
 
@@ -592,7 +725,27 @@ function saveSubmission(array $doctor, array $post, array $files): array
     }
     $submission['pdf_file'] = basename($pdfPath);
 
-    file_put_contents(SUBMISSIONS_DIR . '/' . $id . '.json', json_encode($submission, JSON_PRETTY_PRINT));
+    if (isWordPressRuntime()) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'allu_submissions';
+        $wpdb->insert($table, [
+            'id' => $submission['id'],
+            'submitted_at' => $submission['submitted_at'],
+            'doctor_id' => (int)$doctor['id'],
+            'data' => json_encode($submission),
+            'pdf_file' => $submission['pdf_file'],
+        ]);
+    } else {
+        $db = getSqliteDb();
+        $stmt = $db->prepare('INSERT INTO submissions (id, submitted_at, doctor_id, data, pdf_file) VALUES (?, ?, ?, ?, ?)');
+        $stmt->execute([
+            $submission['id'],
+            $submission['submitted_at'],
+            (int)$doctor['id'],
+            json_encode($submission),
+            $submission['pdf_file'],
+        ]);
+    }
 
     return [true, 'Submission saved and PDF generated successfully.', null, $id];
 }
@@ -1683,11 +1836,28 @@ endobj
 
 function findSubmission(string $id): ?array
 {
-    $file = SUBMISSIONS_DIR . '/' . $id . '.json';
-    if (!file_exists($file)) {
+    if ($id === '') {
         return null;
     }
-    return json_decode(file_get_contents($file), true);
+
+    if (isWordPressRuntime()) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'allu_submissions';
+        $row = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$table} WHERE id = %s", $id), ARRAY_A);
+        if ($row) {
+            return json_decode($row['data'], true);
+        }
+        return null;
+    }
+
+    $db = getSqliteDb();
+    $stmt = $db->prepare('SELECT data FROM submissions WHERE id = ?');
+    $stmt->execute([$id]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) {
+        return json_decode($row['data'], true);
+    }
+    return null;
 }
 
 function downloadPdf(string $id): void
