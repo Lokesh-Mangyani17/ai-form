@@ -7,7 +7,6 @@ define('SUBMISSIONS_DIR', DATA_DIR . '/submissions');
 define('SQLITE_DB_FILE', DATA_DIR . '/store.db');
 define('PDF_TEMPLATE_FILE', DATA_DIR . '/ApprovalToPrescribePsychedelics.pdf');
 define('PDF_TEMPLATE_URL', 'https://www.medsafe.govt.nz/downloads/ApprovalToPrescribePsychedelics.pdf');
-define('PDF_FIELD_MAP_FILE', DATA_DIR . '/pdf_field_map.json');
 /** @var float Default Y position for signature box on page 6. */
 const PDF_DEFAULT_SIGNATURE_Y = 536;
 /** @var float Horizontal offset from label to value in label-value pairs. */
@@ -277,6 +276,7 @@ function getSqliteDb(): PDO
             $db = new PDO('sqlite:' . SQLITE_DB_FILE);
             $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $db->exec('PRAGMA journal_mode=WAL');
+            $db->exec('PRAGMA foreign_keys = ON');
         } catch (\PDOException $e) {
             throw new \RuntimeException('Unable to open database at ' . SQLITE_DB_FILE . ': ' . $e->getMessage(), 0, $e);
         }
@@ -306,6 +306,7 @@ function bootstrapWordPressTables(): void
 {
     global $wpdb;
     $table = $wpdb->prefix . 'allu_submissions';
+    $prodTable = $wpdb->prefix . 'allu_submission_products';
     $charset = $wpdb->get_charset_collate();
 
     if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) {
@@ -313,11 +314,48 @@ function bootstrapWordPressTables(): void
             id VARCHAR(255) NOT NULL,
             submitted_at DATETIME NOT NULL,
             doctor_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
-            data LONGTEXT NOT NULL,
+            doctor_name VARCHAR(255) NOT NULL DEFAULT '',
+            doctor_email VARCHAR(255) NOT NULL DEFAULT '',
+            doctor_phone VARCHAR(255) NOT NULL DEFAULT '',
+            doctor_cpn VARCHAR(255) NOT NULL DEFAULT '',
+            doctor_title VARCHAR(255) NOT NULL DEFAULT '',
+            doctor_preferred_name VARCHAR(255) NOT NULL DEFAULT '',
+            doctor_first_name VARCHAR(255) NOT NULL DEFAULT '',
+            doctor_surname VARCHAR(255) NOT NULL DEFAULT '',
+            vocational_scope TEXT NOT NULL DEFAULT '',
+            clinical_experience TEXT NOT NULL DEFAULT '',
+            indication TEXT NOT NULL DEFAULT '',
+            indication_other TEXT NOT NULL DEFAULT '',
+            sourcing_notes TEXT NOT NULL DEFAULT '',
+            supporting_evidence_notes TEXT NOT NULL DEFAULT '',
+            treatment_protocol_notes TEXT NOT NULL DEFAULT '',
+            scientific_peer_review_notes TEXT NOT NULL DEFAULT '',
+            admin_monitoring_notes TEXT NOT NULL DEFAULT '',
+            application_date VARCHAR(255) NOT NULL DEFAULT '',
+            signature_mode VARCHAR(255) NOT NULL DEFAULT '',
+            signature_drawn MEDIUMTEXT NOT NULL DEFAULT '',
+            signature_upload VARCHAR(255) NOT NULL DEFAULT '',
+            peer_support_file VARCHAR(255) NOT NULL DEFAULT '',
             pdf_file VARCHAR(255) NOT NULL DEFAULT '',
             PRIMARY KEY (id),
             KEY doctor_id (doctor_id),
             KEY submitted_at (submitted_at)
+        ) {$charset}");
+    }
+
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $prodTable)) !== $prodTable) {
+        $wpdb->query("CREATE TABLE {$prodTable} (
+            submission_id VARCHAR(255) NOT NULL,
+            product_id VARCHAR(255) NOT NULL,
+            product_name VARCHAR(255) NOT NULL DEFAULT '',
+            component VARCHAR(255) NOT NULL DEFAULT '',
+            strength VARCHAR(255) NOT NULL DEFAULT '',
+            form VARCHAR(255) NOT NULL DEFAULT '',
+            source VARCHAR(255) NOT NULL DEFAULT '',
+            indication TEXT NOT NULL DEFAULT '',
+            indication_other TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (submission_id, product_id),
+            KEY submission_id (submission_id)
         ) {$charset}");
     }
 }
@@ -332,9 +370,24 @@ function bootstrapSqliteTables(): void
         component TEXT NOT NULL DEFAULT "",
         strength TEXT NOT NULL DEFAULT "",
         form TEXT NOT NULL DEFAULT "",
-        source TEXT NOT NULL DEFAULT "",
-        indications TEXT NOT NULL DEFAULT "[]",
-        indication_map TEXT NOT NULL DEFAULT "{}"
+        source TEXT NOT NULL DEFAULT ""
+    )');
+
+    $db->exec('CREATE TABLE IF NOT EXISTS product_indications (
+        product_id TEXT NOT NULL,
+        indication TEXT NOT NULL,
+        PRIMARY KEY (product_id, indication),
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    )');
+
+    $db->exec('CREATE TABLE IF NOT EXISTS product_indication_details (
+        product_id TEXT NOT NULL,
+        indication TEXT NOT NULL,
+        supporting_evidence TEXT NOT NULL DEFAULT "",
+        treatment_protocol TEXT NOT NULL DEFAULT "",
+        scientific_peer_review TEXT NOT NULL DEFAULT "",
+        PRIMARY KEY (product_id, indication),
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
     )');
 
     $db->exec('CREATE TABLE IF NOT EXISTS doctor_prefs (
@@ -347,23 +400,50 @@ function bootstrapSqliteTables(): void
         id TEXT PRIMARY KEY,
         submitted_at TEXT NOT NULL,
         doctor_id INTEGER NOT NULL DEFAULT 0,
-        data TEXT NOT NULL,
+        doctor_name TEXT NOT NULL DEFAULT "",
+        doctor_email TEXT NOT NULL DEFAULT "",
+        doctor_phone TEXT NOT NULL DEFAULT "",
+        doctor_cpn TEXT NOT NULL DEFAULT "",
+        doctor_title TEXT NOT NULL DEFAULT "",
+        doctor_preferred_name TEXT NOT NULL DEFAULT "",
+        doctor_first_name TEXT NOT NULL DEFAULT "",
+        doctor_surname TEXT NOT NULL DEFAULT "",
+        vocational_scope TEXT NOT NULL DEFAULT "",
+        clinical_experience TEXT NOT NULL DEFAULT "",
+        indication TEXT NOT NULL DEFAULT "",
+        indication_other TEXT NOT NULL DEFAULT "",
+        sourcing_notes TEXT NOT NULL DEFAULT "",
+        supporting_evidence_notes TEXT NOT NULL DEFAULT "",
+        treatment_protocol_notes TEXT NOT NULL DEFAULT "",
+        scientific_peer_review_notes TEXT NOT NULL DEFAULT "",
+        admin_monitoring_notes TEXT NOT NULL DEFAULT "",
+        application_date TEXT NOT NULL DEFAULT "",
+        signature_mode TEXT NOT NULL DEFAULT "",
+        signature_drawn TEXT NOT NULL DEFAULT "",
+        signature_upload TEXT NOT NULL DEFAULT "",
+        peer_support_file TEXT NOT NULL DEFAULT "",
         pdf_file TEXT NOT NULL DEFAULT ""
+    )');
+
+    $db->exec('CREATE TABLE IF NOT EXISTS submission_products (
+        submission_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT NOT NULL DEFAULT "",
+        component TEXT NOT NULL DEFAULT "",
+        strength TEXT NOT NULL DEFAULT "",
+        form TEXT NOT NULL DEFAULT "",
+        source TEXT NOT NULL DEFAULT "",
+        indication TEXT NOT NULL DEFAULT "",
+        indication_other TEXT NOT NULL DEFAULT "",
+        PRIMARY KEY (submission_id, product_id),
+        FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE
     )');
 
     $count = $db->query('SELECT EXISTS(SELECT 1 FROM products LIMIT 1)')->fetchColumn();
     if (!(int)$count) {
-        $stmt = $db->prepare('INSERT OR IGNORE INTO products (id, name, component, strength, form, source, indications, indication_map) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-        $stmt->execute([
-            'prd-001',
-            'Psilocybin Oral Capsule',
-            'Psilocybin',
-            '25mg',
-            'Capsule',
-            'Medsafe-approved compounding supplier, NZ',
-            json_encode(['Depression']),
-            json_encode(['Depression' => ['supporting_evidence' => 'Default supporting evidence', 'treatment_protocol' => 'Default treatment protocol', 'scientific_peer_review' => 'Default peer review']]),
-        ]);
+        $db->exec("INSERT OR IGNORE INTO products (id, name, component, strength, form, source) VALUES ('prd-001', 'Psilocybin Oral Capsule', 'Psilocybin', '25mg', 'Capsule', 'Medsafe-approved compounding supplier, NZ')");
+        $db->exec("INSERT OR IGNORE INTO product_indications (product_id, indication) VALUES ('prd-001', 'Depression')");
+        $db->exec("INSERT OR IGNORE INTO product_indication_details (product_id, indication, supporting_evidence, treatment_protocol, scientific_peer_review) VALUES ('prd-001', 'Depression', 'Default supporting evidence', 'Default treatment protocol', 'Default peer review')");
     }
 }
 
@@ -469,8 +549,25 @@ function getProducts(): array
     }
 
     $db = getSqliteDb();
-    $rows = $db->query('SELECT id, name, component, strength, form, source, indications, indication_map FROM products')->fetchAll(PDO::FETCH_ASSOC);
-    return array_map(function ($row) {
+    $rows = $db->query('SELECT id, name, component, strength, form, source FROM products')->fetchAll(PDO::FETCH_ASSOC);
+
+    $indRows = $db->query('SELECT product_id, indication FROM product_indications ORDER BY product_id')->fetchAll(PDO::FETCH_ASSOC);
+    $indMap = [];
+    foreach ($indRows as $ir) {
+        $indMap[$ir['product_id']][] = $ir['indication'];
+    }
+
+    $detRows = $db->query('SELECT product_id, indication, supporting_evidence, treatment_protocol, scientific_peer_review FROM product_indication_details ORDER BY product_id')->fetchAll(PDO::FETCH_ASSOC);
+    $detMap = [];
+    foreach ($detRows as $dr) {
+        $detMap[$dr['product_id']][$dr['indication']] = [
+            'supporting_evidence' => $dr['supporting_evidence'],
+            'treatment_protocol' => $dr['treatment_protocol'],
+            'scientific_peer_review' => $dr['scientific_peer_review'],
+        ];
+    }
+
+    return array_map(function ($row) use ($indMap, $detMap) {
         return [
             'id' => $row['id'],
             'name' => $row['name'],
@@ -478,8 +575,8 @@ function getProducts(): array
             'strength' => $row['strength'],
             'form' => $row['form'],
             'source' => $row['source'],
-            'indications' => json_decode($row['indications'], true) ?: [],
-            'indication_map' => json_decode($row['indication_map'], true) ?: [],
+            'indications' => $indMap[$row['id']] ?? [],
+            'indication_map' => $detMap[$row['id']] ?? [],
         ];
     }, $rows);
 }
@@ -504,17 +601,39 @@ function saveProduct(array $data): array
     ];
 
     $db = getSqliteDb();
-    $stmt = $db->prepare('INSERT INTO products (id, name, component, strength, form, source, indications, indication_map) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    $stmt->execute([
-        $product['id'],
-        $product['name'],
-        $product['component'],
-        $product['strength'],
-        $product['form'],
-        $product['source'],
-        json_encode($product['indications']),
-        json_encode($product['indication_map']),
-    ]);
+    $db->beginTransaction();
+    try {
+        $stmt = $db->prepare('INSERT INTO products (id, name, component, strength, form, source) VALUES (?, ?, ?, ?, ?, ?)');
+        $stmt->execute([
+            $product['id'],
+            $product['name'],
+            $product['component'],
+            $product['strength'],
+            $product['form'],
+            $product['source'],
+        ]);
+
+        $indStmt = $db->prepare('INSERT INTO product_indications (product_id, indication) VALUES (?, ?)');
+        foreach ($product['indications'] as $ind) {
+            $indStmt->execute([$product['id'], $ind]);
+        }
+
+        $detStmt = $db->prepare('INSERT INTO product_indication_details (product_id, indication, supporting_evidence, treatment_protocol, scientific_peer_review) VALUES (?, ?, ?, ?, ?)');
+        foreach ($product['indication_map'] as $ind => $details) {
+            $detStmt->execute([
+                $product['id'],
+                $ind,
+                $details['supporting_evidence'] ?? '',
+                $details['treatment_protocol'] ?? '',
+                $details['scientific_peer_review'] ?? '',
+            ]);
+        }
+
+        $db->commit();
+    } catch (\Exception $e) {
+        $db->rollBack();
+        throw $e;
+    }
     return [true, 'Product added successfully.', null];
 }
 
@@ -524,8 +643,19 @@ function deleteProduct(string $id): array
         return [false, null, 'Missing product id.'];
     }
     $db = getSqliteDb();
-    $stmt = $db->prepare('DELETE FROM products WHERE id = ?');
-    $stmt->execute([$id]);
+    $db->beginTransaction();
+    try {
+        $stmt = $db->prepare('DELETE FROM product_indication_details WHERE product_id = ?');
+        $stmt->execute([$id]);
+        $stmt = $db->prepare('DELETE FROM product_indications WHERE product_id = ?');
+        $stmt->execute([$id]);
+        $stmt = $db->prepare('DELETE FROM products WHERE id = ?');
+        $stmt->execute([$id]);
+        $db->commit();
+    } catch (\Exception $e) {
+        $db->rollBack();
+        throw $e;
+    }
     return [true, 'Product deleted.', null];
 }
 
@@ -565,30 +695,93 @@ function saveDoctorPrefs(int $doctorId, array $payload): void
     $stmt->execute([$doctorId, $vocationalScope, $clinicalExperience]);
 }
 
+function reconstructSubmissionFromRow(array $row, array $productRows): array
+{
+    $products = [];
+    $productNames = [];
+    $productDetails = [];
+    $productIndications = [];
+    $productIndicationOthers = [];
+
+    foreach ($productRows as $pr) {
+        $products[] = $pr['product_id'];
+        $productNames[] = $pr['product_name'];
+        $productDetails[] = [
+            'id' => $pr['product_id'],
+            'name' => $pr['product_name'],
+            'component' => $pr['component'],
+            'strength' => $pr['strength'],
+            'form' => $pr['form'],
+            'source' => $pr['source'],
+            'indications' => [],
+            'indication_map' => [],
+        ];
+        $productIndications[$pr['product_id']] = $pr['indication'];
+        $productIndicationOthers[$pr['product_id']] = $pr['indication_other'];
+    }
+
+    return [
+        'id' => $row['id'],
+        'submitted_at' => $row['submitted_at'],
+        'doctor' => [
+            'id' => (int)$row['doctor_id'],
+            'name' => $row['doctor_name'],
+            'title' => $row['doctor_title'],
+            'first_name' => $row['doctor_first_name'],
+            'preferred_name' => $row['doctor_preferred_name'],
+            'surname' => $row['doctor_surname'],
+            'email' => $row['doctor_email'],
+            'phone' => $row['doctor_phone'],
+            'cpn' => $row['doctor_cpn'],
+        ],
+        'form' => [
+            'vocational_scope' => $row['vocational_scope'],
+            'clinical_experience' => $row['clinical_experience'],
+            'products' => $products,
+            'product_names' => $productNames,
+            'product_details' => $productDetails,
+            'product_indications' => $productIndications,
+            'product_indication_others' => $productIndicationOthers,
+            'indication' => $row['indication'],
+            'indication_other' => $row['indication_other'],
+            'sourcing_notes' => $row['sourcing_notes'],
+            'supporting_evidence_notes' => $row['supporting_evidence_notes'],
+            'treatment_protocol_notes' => $row['treatment_protocol_notes'],
+            'scientific_peer_review_notes' => $row['scientific_peer_review_notes'],
+            'admin_monitoring_notes' => $row['admin_monitoring_notes'],
+            'date' => $row['application_date'],
+            'signature_mode' => $row['signature_mode'],
+            'signature_drawn' => $row['signature_drawn'],
+            'signature_upload' => $row['signature_upload'] !== '' ? $row['signature_upload'] : null,
+            'peer_support_file' => $row['peer_support_file'] !== '' ? $row['peer_support_file'] : null,
+        ],
+        'pdf_file' => $row['pdf_file'],
+    ];
+}
+
 function getSubmissions(): array
 {
     if (isWordPressRuntime()) {
         global $wpdb;
         $table = $wpdb->prefix . 'allu_submissions';
-        $rows = $wpdb->get_results("SELECT data FROM {$table} ORDER BY submitted_at DESC", ARRAY_A);
+        $prodTable = $wpdb->prefix . 'allu_submission_products';
+        $rows = $wpdb->get_results("SELECT * FROM {$table} ORDER BY submitted_at DESC", ARRAY_A);
         $records = [];
         foreach ($rows as $row) {
-            $entry = json_decode($row['data'], true);
-            if ($entry) {
-                $records[] = $entry;
-            }
+            $prods = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$prodTable} WHERE submission_id = %s", $row['id']), ARRAY_A);
+            $records[] = reconstructSubmissionFromRow($row, $prods ?: []);
         }
         return $records;
     }
 
     $db = getSqliteDb();
-    $rows = $db->query('SELECT data FROM submissions ORDER BY submitted_at DESC')->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query('SELECT * FROM submissions ORDER BY submitted_at DESC')->fetchAll(PDO::FETCH_ASSOC);
     $records = [];
     foreach ($rows as $row) {
-        $entry = json_decode($row['data'], true);
-        if ($entry) {
-            $records[] = $entry;
-        }
+        $stmt = $db->prepare('SELECT * FROM submission_products WHERE submission_id = ?');
+        $stmt->execute([$row['id']]);
+        $prods = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $records[] = reconstructSubmissionFromRow($row, $prods);
     }
     return $records;
 }
@@ -732,23 +925,111 @@ function saveSubmission(array $doctor, array $post, array $files): array
     if (isWordPressRuntime()) {
         global $wpdb;
         $table = $wpdb->prefix . 'allu_submissions';
-        $wpdb->insert($table, [
-            'id' => $submission['id'],
-            'submitted_at' => $submission['submitted_at'],
-            'doctor_id' => (int)$doctor['id'],
-            'data' => json_encode($submission),
-            'pdf_file' => $submission['pdf_file'],
-        ]);
+        $prodTable = $wpdb->prefix . 'allu_submission_products';
+        $wpdb->query('START TRANSACTION');
+        try {
+            $wpdb->insert($table, [
+                'id' => $submission['id'],
+                'submitted_at' => $submission['submitted_at'],
+                'doctor_id' => (int)$doctor['id'],
+                'doctor_name' => $doctor['name'],
+                'doctor_email' => $doctor['email'],
+                'doctor_phone' => $doctor['phone'],
+                'doctor_cpn' => $doctor['cpn'],
+                'doctor_title' => $doctor['title'],
+                'doctor_preferred_name' => $doctor['preferred_name'],
+                'doctor_first_name' => $doctor['first_name'],
+                'doctor_surname' => $doctor['surname'],
+                'vocational_scope' => $submission['form']['vocational_scope'],
+                'clinical_experience' => $submission['form']['clinical_experience'],
+                'indication' => $submission['form']['indication'],
+                'indication_other' => $submission['form']['indication_other'],
+                'sourcing_notes' => $submission['form']['sourcing_notes'],
+                'supporting_evidence_notes' => $submission['form']['supporting_evidence_notes'],
+                'treatment_protocol_notes' => $submission['form']['treatment_protocol_notes'],
+                'scientific_peer_review_notes' => $submission['form']['scientific_peer_review_notes'],
+                'admin_monitoring_notes' => $submission['form']['admin_monitoring_notes'],
+                'application_date' => $submission['form']['date'],
+                'signature_mode' => $submission['form']['signature_mode'],
+                'signature_drawn' => $submission['form']['signature_drawn'],
+                'signature_upload' => $submission['form']['signature_upload'] ?? '',
+                'peer_support_file' => $submission['form']['peer_support_file'] ?? '',
+                'pdf_file' => $submission['pdf_file'],
+            ]);
+            foreach ($selectedDetails as $pd) {
+                $pid = (string)$pd['id'];
+                $wpdb->insert($prodTable, [
+                    'submission_id' => $submission['id'],
+                    'product_id' => $pid,
+                    'product_name' => $pd['name'],
+                    'component' => $pd['component'],
+                    'strength' => $pd['strength'],
+                    'form' => $pd['form'],
+                    'source' => $pd['source'],
+                    'indication' => (string)($productIndications[$pid] ?? ''),
+                    'indication_other' => (string)($productIndicationOthers[$pid] ?? ''),
+                ]);
+            }
+            $wpdb->query('COMMIT');
+        } catch (\Exception $e) {
+            $wpdb->query('ROLLBACK');
+            throw $e;
+        }
     } else {
         $db = getSqliteDb();
-        $stmt = $db->prepare('INSERT INTO submissions (id, submitted_at, doctor_id, data, pdf_file) VALUES (?, ?, ?, ?, ?)');
-        $stmt->execute([
-            $submission['id'],
-            $submission['submitted_at'],
-            (int)$doctor['id'],
-            json_encode($submission),
-            $submission['pdf_file'],
-        ]);
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('INSERT INTO submissions (id, submitted_at, doctor_id, doctor_name, doctor_email, doctor_phone, doctor_cpn, doctor_title, doctor_preferred_name, doctor_first_name, doctor_surname, vocational_scope, clinical_experience, indication, indication_other, sourcing_notes, supporting_evidence_notes, treatment_protocol_notes, scientific_peer_review_notes, admin_monitoring_notes, application_date, signature_mode, signature_drawn, signature_upload, peer_support_file, pdf_file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            $stmt->execute([
+                $submission['id'],
+                $submission['submitted_at'],
+                (int)$doctor['id'],
+                $doctor['name'],
+                $doctor['email'],
+                $doctor['phone'],
+                $doctor['cpn'],
+                $doctor['title'],
+                $doctor['preferred_name'],
+                $doctor['first_name'],
+                $doctor['surname'],
+                $submission['form']['vocational_scope'],
+                $submission['form']['clinical_experience'],
+                $submission['form']['indication'],
+                $submission['form']['indication_other'],
+                $submission['form']['sourcing_notes'],
+                $submission['form']['supporting_evidence_notes'],
+                $submission['form']['treatment_protocol_notes'],
+                $submission['form']['scientific_peer_review_notes'],
+                $submission['form']['admin_monitoring_notes'],
+                $submission['form']['date'],
+                $submission['form']['signature_mode'],
+                $submission['form']['signature_drawn'],
+                $submission['form']['signature_upload'] ?? '',
+                $submission['form']['peer_support_file'] ?? '',
+                $submission['pdf_file'],
+            ]);
+
+            $prodStmt = $db->prepare('INSERT INTO submission_products (submission_id, product_id, product_name, component, strength, form, source, indication, indication_other) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            foreach ($selectedDetails as $pd) {
+                $pid = (string)$pd['id'];
+                $prodStmt->execute([
+                    $submission['id'],
+                    $pid,
+                    $pd['name'],
+                    $pd['component'],
+                    $pd['strength'],
+                    $pd['form'],
+                    $pd['source'],
+                    (string)($productIndications[$pid] ?? ''),
+                    (string)($productIndicationOthers[$pid] ?? ''),
+                ]);
+            }
+
+            $db->commit();
+        } catch (\Exception $e) {
+            $db->rollBack();
+            throw $e;
+        }
     }
 
     return [true, 'Submission saved and PDF generated successfully.', null, $id];
@@ -1847,19 +2128,24 @@ function findSubmission(string $id): ?array
     if (isWordPressRuntime()) {
         global $wpdb;
         $table = $wpdb->prefix . 'allu_submissions';
-        $row = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$table} WHERE id = %s", $id), ARRAY_A);
+        $prodTable = $wpdb->prefix . 'allu_submission_products';
+        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE id = %s", $id), ARRAY_A);
         if ($row) {
-            return json_decode($row['data'], true);
+            $prods = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$prodTable} WHERE submission_id = %s", $id), ARRAY_A);
+            return reconstructSubmissionFromRow($row, $prods ?: []);
         }
         return null;
     }
 
     $db = getSqliteDb();
-    $stmt = $db->prepare('SELECT data FROM submissions WHERE id = ?');
+    $stmt = $db->prepare('SELECT * FROM submissions WHERE id = ?');
     $stmt->execute([$id]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row) {
-        return json_decode($row['data'], true);
+        $prodStmt = $db->prepare('SELECT * FROM submission_products WHERE submission_id = ?');
+        $prodStmt->execute([$id]);
+        $prods = $prodStmt->fetchAll(PDO::FETCH_ASSOC);
+        return reconstructSubmissionFromRow($row, $prods);
     }
     return null;
 }
