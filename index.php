@@ -273,9 +273,13 @@ function getSqliteDb(): PDO
 {
     static $db = null;
     if ($db === null) {
-        $db = new PDO('sqlite:' . SQLITE_DB_FILE);
-        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $db->exec('PRAGMA journal_mode=WAL');
+        try {
+            $db = new PDO('sqlite:' . SQLITE_DB_FILE);
+            $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $db->exec('PRAGMA journal_mode=WAL');
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('Unable to open database at ' . SQLITE_DB_FILE . ': ' . $e->getMessage(), 0, $e);
+        }
     }
     return $db;
 }
@@ -347,8 +351,8 @@ function bootstrapSqliteTables(): void
         pdf_file TEXT NOT NULL DEFAULT ""
     )');
 
-    $count = $db->query('SELECT COUNT(*) FROM products')->fetchColumn();
-    if ((int)$count === 0) {
+    $count = $db->query('SELECT EXISTS(SELECT 1 FROM products LIMIT 1)')->fetchColumn();
+    if (!(int)$count) {
         $stmt = $db->prepare('INSERT OR IGNORE INTO products (id, name, component, strength, form, source, indications, indication_map) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             'prd-001',
@@ -465,7 +469,7 @@ function getProducts(): array
     }
 
     $db = getSqliteDb();
-    $rows = $db->query('SELECT * FROM products')->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query('SELECT id, name, component, strength, form, source, indications, indication_map FROM products')->fetchAll(PDO::FETCH_ASSOC);
     return array_map(function ($row) {
         return [
             'id' => $row['id'],
