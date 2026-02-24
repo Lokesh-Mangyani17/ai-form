@@ -322,18 +322,18 @@ function bootstrapWordPressTables(): void
             doctor_preferred_name VARCHAR(255) NOT NULL DEFAULT '',
             doctor_first_name VARCHAR(255) NOT NULL DEFAULT '',
             doctor_surname VARCHAR(255) NOT NULL DEFAULT '',
-            vocational_scope TEXT NOT NULL,
-            clinical_experience TEXT NOT NULL,
-            indication TEXT NOT NULL,
-            indication_other TEXT NOT NULL,
-            sourcing_notes TEXT NOT NULL,
-            supporting_evidence_notes TEXT NOT NULL,
-            treatment_protocol_notes TEXT NOT NULL,
-            scientific_peer_review_notes TEXT NOT NULL,
-            admin_monitoring_notes TEXT NOT NULL,
+            vocational_scope TEXT NOT NULL DEFAULT '',
+            clinical_experience TEXT NOT NULL DEFAULT '',
+            indication TEXT NOT NULL DEFAULT '',
+            indication_other TEXT NOT NULL DEFAULT '',
+            sourcing_notes TEXT NOT NULL DEFAULT '',
+            supporting_evidence_notes TEXT NOT NULL DEFAULT '',
+            treatment_protocol_notes TEXT NOT NULL DEFAULT '',
+            scientific_peer_review_notes TEXT NOT NULL DEFAULT '',
+            admin_monitoring_notes TEXT NOT NULL DEFAULT '',
             application_date VARCHAR(255) NOT NULL DEFAULT '',
             signature_mode VARCHAR(255) NOT NULL DEFAULT '',
-            signature_drawn MEDIUMTEXT NOT NULL,
+            signature_drawn MEDIUMTEXT NOT NULL DEFAULT '',
             signature_upload VARCHAR(255) NOT NULL DEFAULT '',
             peer_support_file VARCHAR(255) NOT NULL DEFAULT '',
             pdf_file VARCHAR(255) NOT NULL DEFAULT '',
@@ -352,8 +352,8 @@ function bootstrapWordPressTables(): void
             strength VARCHAR(255) NOT NULL DEFAULT '',
             form VARCHAR(255) NOT NULL DEFAULT '',
             source VARCHAR(255) NOT NULL DEFAULT '',
-            indication TEXT NOT NULL,
-            indication_other TEXT NOT NULL,
+            indication TEXT NOT NULL DEFAULT '',
+            indication_other TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (submission_id, product_id),
             KEY submission_id (submission_id)
         ) {$charset}");
@@ -925,48 +925,55 @@ function saveSubmission(array $doctor, array $post, array $files): array
     if (isWordPressRuntime()) {
         global $wpdb;
         $table = $wpdb->prefix . 'allu_submissions';
-        $wpdb->insert($table, [
-            'id' => $submission['id'],
-            'submitted_at' => $submission['submitted_at'],
-            'doctor_id' => (int)$doctor['id'],
-            'doctor_name' => $doctor['name'],
-            'doctor_email' => $doctor['email'],
-            'doctor_phone' => $doctor['phone'],
-            'doctor_cpn' => $doctor['cpn'],
-            'doctor_title' => $doctor['title'],
-            'doctor_preferred_name' => $doctor['preferred_name'],
-            'doctor_first_name' => $doctor['first_name'],
-            'doctor_surname' => $doctor['surname'],
-            'vocational_scope' => $submission['form']['vocational_scope'],
-            'clinical_experience' => $submission['form']['clinical_experience'],
-            'indication' => $submission['form']['indication'],
-            'indication_other' => $submission['form']['indication_other'],
-            'sourcing_notes' => $submission['form']['sourcing_notes'],
-            'supporting_evidence_notes' => $submission['form']['supporting_evidence_notes'],
-            'treatment_protocol_notes' => $submission['form']['treatment_protocol_notes'],
-            'scientific_peer_review_notes' => $submission['form']['scientific_peer_review_notes'],
-            'admin_monitoring_notes' => $submission['form']['admin_monitoring_notes'],
-            'application_date' => $submission['form']['date'],
-            'signature_mode' => $submission['form']['signature_mode'],
-            'signature_drawn' => $submission['form']['signature_drawn'],
-            'signature_upload' => $submission['form']['signature_upload'] ?? '',
-            'peer_support_file' => $submission['form']['peer_support_file'] ?? '',
-            'pdf_file' => $submission['pdf_file'],
-        ]);
         $prodTable = $wpdb->prefix . 'allu_submission_products';
-        foreach ($selectedDetails as $pd) {
-            $pid = (string)$pd['id'];
-            $wpdb->insert($prodTable, [
-                'submission_id' => $submission['id'],
-                'product_id' => $pid,
-                'product_name' => $pd['name'],
-                'component' => $pd['component'],
-                'strength' => $pd['strength'],
-                'form' => $pd['form'],
-                'source' => $pd['source'],
-                'indication' => (string)($productIndications[$pid] ?? ''),
-                'indication_other' => (string)($productIndicationOthers[$pid] ?? ''),
+        $wpdb->query('START TRANSACTION');
+        try {
+            $wpdb->insert($table, [
+                'id' => $submission['id'],
+                'submitted_at' => $submission['submitted_at'],
+                'doctor_id' => (int)$doctor['id'],
+                'doctor_name' => $doctor['name'],
+                'doctor_email' => $doctor['email'],
+                'doctor_phone' => $doctor['phone'],
+                'doctor_cpn' => $doctor['cpn'],
+                'doctor_title' => $doctor['title'],
+                'doctor_preferred_name' => $doctor['preferred_name'],
+                'doctor_first_name' => $doctor['first_name'],
+                'doctor_surname' => $doctor['surname'],
+                'vocational_scope' => $submission['form']['vocational_scope'],
+                'clinical_experience' => $submission['form']['clinical_experience'],
+                'indication' => $submission['form']['indication'],
+                'indication_other' => $submission['form']['indication_other'],
+                'sourcing_notes' => $submission['form']['sourcing_notes'],
+                'supporting_evidence_notes' => $submission['form']['supporting_evidence_notes'],
+                'treatment_protocol_notes' => $submission['form']['treatment_protocol_notes'],
+                'scientific_peer_review_notes' => $submission['form']['scientific_peer_review_notes'],
+                'admin_monitoring_notes' => $submission['form']['admin_monitoring_notes'],
+                'application_date' => $submission['form']['date'],
+                'signature_mode' => $submission['form']['signature_mode'],
+                'signature_drawn' => $submission['form']['signature_drawn'],
+                'signature_upload' => $submission['form']['signature_upload'] ?? '',
+                'peer_support_file' => $submission['form']['peer_support_file'] ?? '',
+                'pdf_file' => $submission['pdf_file'],
             ]);
+            foreach ($selectedDetails as $pd) {
+                $pid = (string)$pd['id'];
+                $wpdb->insert($prodTable, [
+                    'submission_id' => $submission['id'],
+                    'product_id' => $pid,
+                    'product_name' => $pd['name'],
+                    'component' => $pd['component'],
+                    'strength' => $pd['strength'],
+                    'form' => $pd['form'],
+                    'source' => $pd['source'],
+                    'indication' => (string)($productIndications[$pid] ?? ''),
+                    'indication_other' => (string)($productIndicationOthers[$pid] ?? ''),
+                ]);
+            }
+            $wpdb->query('COMMIT');
+        } catch (\Exception $e) {
+            $wpdb->query('ROLLBACK');
+            throw $e;
         }
     } else {
         $db = getSqliteDb();
