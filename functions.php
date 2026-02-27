@@ -349,15 +349,23 @@ function allu_form_bootstrap_storage(): void
 {
     $data_dir = allu_form_get_data_dir();
     if (!is_dir($data_dir)) {
-        mkdir($data_dir, 0755, true);
+        if (!@mkdir($data_dir, 0755, true) && !is_dir($data_dir)) {
+            throw new \RuntimeException('Unable to create data directory: ' . $data_dir);
+        }
     }
-    if (!is_dir(allu_form_get_submissions_dir())) {
-        mkdir(allu_form_get_submissions_dir(), 0755, true);
+    $subs_dir = allu_form_get_submissions_dir();
+    if (!is_dir($subs_dir)) {
+        if (!@mkdir($subs_dir, 0755, true) && !is_dir($subs_dir)) {
+            throw new \RuntimeException('Unable to create submissions directory: ' . $subs_dir);
+        }
     }
 
     $htaccess = $data_dir . '/.htaccess';
     if (!file_exists($htaccess)) {
-        file_put_contents($htaccess, "Options -Indexes\nDeny from all\n");
+        $written = @file_put_contents($htaccess, "Options -Indexes\nDeny from all\n");
+        if ($written === false && function_exists('error_log')) {
+            error_log('Allu Form: Unable to create .htaccess in ' . $data_dir);
+        }
     }
 
     if (allu_form_is_wp_runtime()) {
