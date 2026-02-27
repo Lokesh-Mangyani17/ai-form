@@ -2330,8 +2330,11 @@ function allu_form_render_shortcode(): string
 
     allu_form_bootstrap_storage();
 
-    $page = isset($_GET['page']) ? sanitize_text_field(wp_unslash($_GET['page'])) : 'form';
-    $action = isset($_GET['action']) ? sanitize_text_field(wp_unslash($_GET['action'])) : null;
+    $raw_page = isset($_GET['page']) ? sanitize_text_field(wp_unslash($_GET['page'])) : 'form';
+    $page = in_array($raw_page, ['form', 'admin'], true) ? $raw_page : 'form';
+    $raw_action = isset($_GET['action']) ? sanitize_text_field(wp_unslash($_GET['action'])) : null;
+    $allowed_actions = ['save_submission', 'save_product', 'delete_product', 'email_pdf', 'download_pdf', 'download_support'];
+    $action = ($raw_action !== null && in_array($raw_action, $allowed_actions, true)) ? $raw_action : null;
     $message = null;
     $error = null;
     $doctor = allu_form_get_doctor_profile();
@@ -2412,6 +2415,7 @@ function allu_form_render_shortcode(): string
       <section class="card">
         <h2>Product Management</h2>
         <form method="post" action="?page=admin&action=save_product" class="grid">
+          <?php wp_nonce_field('allu_form_submission', 'allu_form_nonce'); ?>
           <input name="name" placeholder="Product Name" required />
           <input name="component" placeholder="Component" required />
           <input name="strength" placeholder="Strength" required />
@@ -2450,6 +2454,7 @@ function allu_form_render_shortcode(): string
             </td>
             <td>
               <form method="post" action="?page=admin&action=email_pdf">
+                <?php wp_nonce_field('allu_form_submission', 'allu_form_nonce'); ?>
                 <input type="hidden" name="submission_id" value="<?= htmlspecialchars($s['id']) ?>" />
                 <button type="submit">Email PDF</button>
               </form>
