@@ -1,6 +1,6 @@
 <?php
 /**
- * Theme functions for Allu Form WordPress theme.
+ * Theme functions built for Allu Form WordPress theme.
  *
  * @package Allu_Form
  */
