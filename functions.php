@@ -569,7 +569,8 @@ function allu_form_ensure_pdf_template(): void
 
 function allu_form_is_admin_page(): bool
 {
-    return ($_GET['page'] ?? 'form') === 'admin';
+    $page = isset($_GET['page']) ? sanitize_text_field(wp_unslash($_GET['page'])) : 'form';
+    return $page === 'admin';
 }
 
 function allu_form_parse_indication_line_map(string $raw): array
@@ -2275,6 +2276,44 @@ function allu_form_find_submission(string $id): ?array
     return null;
 }
 
+function allu_form_get_submission_sequence_number(string $submissionId): int
+{
+    if (allu_form_is_wp_runtime()) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'allu_submissions';
+        $row = $wpdb->get_row($wpdb->prepare("SELECT submitted_at FROM {$table} WHERE id = %s", $submissionId), ARRAY_A);
+        if (!$row) {
+            return 0;
+        }
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$table} WHERE submitted_at < %s OR (submitted_at = %s AND id <= %s)",
+            $row['submitted_at'],
+            $row['submitted_at'],
+            $submissionId
+        ));
+    }
+
+    $db = allu_form_get_sqlite_db();
+    $stmt = $db->prepare('SELECT submitted_at FROM submissions WHERE id = ?');
+    $stmt->execute([$submissionId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) {
+        return 0;
+    }
+
+    $countStmt = $db->prepare(
+        'SELECT COUNT(*) FROM submissions WHERE submitted_at < ? OR (submitted_at = ? AND id <= ?)'
+    );
+    $countStmt->execute([$row['submitted_at'], $row['submitted_at'], $submissionId]);
+    return (int) $countStmt->fetchColumn();
+}
+
+function allu_form_get_pdf_download_name(string $submissionId): string
+{
+    $seq = allu_form_get_submission_sequence_number($submissionId);
+    return sprintf('Allu-%03d.pdf', max($seq, 1));
+}
+
 function allu_form_download_pdf(string $id): void
 {
     $submission = allu_form_find_submission($id);
@@ -2296,12 +2335,14 @@ function allu_form_download_pdf(string $id): void
         ob_end_clean();
     }
 
+    $downloadName = allu_form_get_pdf_download_name($id);
+
     header('Content-Type: application/pdf');
     $size = @filesize($file);
     if ($size !== false) {
         header('Content-Length: ' . $size);
     }
-    header('Content-Disposition: attachment; filename="' . basename($file) . '"');
+    header('Content-Disposition: attachment; filename="' . $downloadName . '"');
     readfile($file);
 }
 
@@ -2353,6 +2394,7 @@ function allu_form_email_pdf_to_doctor(string $submissionId): array
 
     $content = chunk_split(base64_encode(file_get_contents($pdfPath)));
     $separator = md5((string)time());
+    $pdfName = allu_form_get_pdf_download_name($submissionId);
     $headers = "From: no-reply@exampleclinic.nz\r\n";
     $headers .= "MIME-Version: 1.0\r\n";
     $headers .= "Content-Type: multipart/mixed; boundary=\"$separator\"";
@@ -2361,9 +2403,9 @@ function allu_form_email_pdf_to_doctor(string $submissionId): array
     $body .= "Content-Type: text/plain; charset=\"utf-8\"\r\n\r\n";
     $body .= $message . "\r\n";
     $body .= "--$separator\r\n";
-    $body .= "Content-Type: application/pdf; name=\"application.pdf\"\r\n";
+    $body .= "Content-Type: application/pdf; name=\"$pdfName\"\r\n";
     $body .= "Content-Transfer-Encoding: base64\r\n";
-    $body .= "Content-Disposition: attachment\r\n\r\n";
+    $body .= "Content-Disposition: attachment; filename=\"$pdfName\"\r\n\r\n";
     $body .= $content . "\r\n";
     $body .= "--$separator--";
 
