@@ -47,6 +47,7 @@ if (!defined('MEDSAFE_PURPLE_B')) {
 // ── WordPress Hooks ───────────────────────────────────────────────────────────
 
 add_action('init', 'allu_form_register_backend_fields');
+add_action('template_redirect', 'allu_form_handle_file_downloads');
 
 function allu_form_register_backend_fields(): void
 {
@@ -58,6 +59,38 @@ function allu_form_register_backend_fields(): void
     if (class_exists('WooCommerce')) {
         add_action('woocommerce_product_options_general_product_data', 'allu_form_render_prescription_product_fields');
         add_action('woocommerce_process_product_meta', 'allu_form_save_prescription_product_fields');
+    }
+}
+
+/**
+ * Handle file download actions before any HTML output is sent.
+ *
+ * WordPress shortcodes execute during the_content filter after the page header
+ * has already been printed.  Sending Content-Type / Content-Disposition headers
+ * at that point is too late and the downloaded file is corrupted by the HTML
+ * that precedes the binary payload.  By hooking into template_redirect we
+ * intercept the request early enough to output the raw file cleanly.
+ */
+function allu_form_handle_file_downloads(): void
+{
+    $raw_action = isset($_GET['action']) ? sanitize_text_field(wp_unslash($_GET['action'])) : null;
+    if ($raw_action === null) {
+        return;
+    }
+
+    if ($raw_action === 'download_pdf') {
+        allu_form_bootstrap_storage();
+        allu_form_download_pdf(sanitize_text_field(wp_unslash($_GET['id'] ?? '')));
+        exit;
+    }
+
+    if ($raw_action === 'download_support') {
+        allu_form_bootstrap_storage();
+        allu_form_download_support_document(
+            sanitize_text_field(wp_unslash($_GET['submission_id'] ?? '')),
+            sanitize_text_field(wp_unslash($_GET['file'] ?? ''))
+        );
+        exit;
     }
 }
 
@@ -2258,7 +2291,16 @@ function allu_form_download_pdf(string $id): void
         return;
     }
 
+    // Discard any output buffers so the raw PDF bytes are the only response body.
+    while (ob_get_level()) {
+        ob_end_clean();
+    }
+
     header('Content-Type: application/pdf');
+    $size = @filesize($file);
+    if ($size !== false) {
+        header('Content-Length: ' . $size);
+    }
     header('Content-Disposition: attachment; filename="' . basename($file) . '"');
     readfile($file);
 }
@@ -2279,7 +2321,16 @@ function allu_form_download_support_document(string $submissionId, string $file)
         return;
     }
 
+    // Discard any output buffers so the raw file bytes are the only response body.
+    while (ob_get_level()) {
+        ob_end_clean();
+    }
+
     header('Content-Type: application/octet-stream');
+    $size = @filesize($path);
+    if ($size !== false) {
+        header('Content-Length: ' . $size);
+    }
     header('Content-Disposition: attachment; filename="' . basename($file) . '"');
     readfile($path);
 }
