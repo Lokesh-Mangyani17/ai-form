@@ -1154,6 +1154,133 @@ function allu_form_create_regulator_pdf(array $submission, string $path): array
     return [false, 'Unable to generate PDF file.'];
 }
 
+/**
+ * Render text in an auto-expanding box, creating overflow pages as needed.
+ *
+ * @param array    &$cmds     Commands for current page (modified in-place)
+ * @param array    &$annots   Annotations for current page (modified in-place)
+ * @param string[] $lines     Word-wrapped text lines
+ * @param float    $boxX      Box left X position
+ * @param float    $boxTopY   Box top Y position (from page top)
+ * @param float    $boxW      Box width
+ * @param float    $minBoxH   Minimum box height
+ * @param float    $textX     Text left X position
+ * @param float    $textStartY First text line Y position (from page top)
+ * @param float    $lineH     Line height
+ * @param float    $fontSize  Font size
+ * @param float    $maxPageY  Maximum Y from page top before footer area
+ * @param float    $pageH     Page height in points
+ * @param callable $yt        Y-transform function (topY, fontSize) => pdfY
+ * @param bool     $richText  Use rich text rendering with URL detection
+ *
+ * @return array{endY: float, overflowPages: array[], overflowAnnots: array[]}
+ */
+function allu_form_pdf_expanding_text_box(
+    array &$cmds,
+    array &$annots,
+    array $lines,
+    float $boxX,
+    float $boxTopY,
+    float $boxW,
+    float $minBoxH,
+    float $textX,
+    float $textStartY,
+    float $lineH,
+    float $fontSize,
+    float $maxPageY,
+    float $pageH,
+    callable $yt,
+    bool $richText = false
+): array {
+    $numLines = count($lines);
+    $textEndY = ($numLines > 0) ? $textStartY + $numLines * $lineH : $textStartY;
+    $neededBoxBot = max($boxTopY + $minBoxH, $textEndY + 5);
+
+    if ($neededBoxBot <= $maxPageY) {
+        // Everything fits on current page
+        $cmds[] = allu_form_pdf_stroke_color(0, 0, 0);
+        $cmds[] = '0.50 w';
+        $cmds[] = allu_form_pdf_rect_command($boxX, $pageH - $neededBoxBot, $boxW, $neededBoxBot - $boxTopY, false);
+        $y = $textStartY;
+        foreach ($lines as $line) {
+            if ($richText) {
+                foreach (allu_form_pdf_rich_text_line($line, $textX, $yt($y, $fontSize), $fontSize) as $c) {
+                    $cmds[] = $c;
+                }
+                foreach (allu_form_pdf_detect_url_annotations($line, $textX, $yt($y, $fontSize), $fontSize, $pageH) as $ua) {
+                    $annots[] = $ua;
+                }
+            } else {
+                $cmds[] = allu_form_pdf_text_command($line, $textX, $yt($y, $fontSize), $fontSize);
+            }
+            $y += $lineH;
+        }
+        return ['endY' => $neededBoxBot, 'overflowPages' => [], 'overflowAnnots' => []];
+    }
+
+    // Overflow: render what fits on current page
+    $cmds[] = allu_form_pdf_stroke_color(0, 0, 0);
+    $cmds[] = '0.50 w';
+    $cmds[] = allu_form_pdf_rect_command($boxX, $pageH - $maxPageY, $boxW, $maxPageY - $boxTopY, false);
+    $y = $textStartY;
+    $lineIdx = 0;
+    foreach ($lines as $line) {
+        if ($y + $lineH > $maxPageY) {
+            break;
+        }
+        if ($richText) {
+            foreach (allu_form_pdf_rich_text_line($line, $textX, $yt($y, $fontSize), $fontSize) as $c) {
+                $cmds[] = $c;
+            }
+            foreach (allu_form_pdf_detect_url_annotations($line, $textX, $yt($y, $fontSize), $fontSize, $pageH) as $ua) {
+                $annots[] = $ua;
+            }
+        } else {
+            $cmds[] = allu_form_pdf_text_command($line, $textX, $yt($y, $fontSize), $fontSize);
+        }
+        $y += $lineH;
+        $lineIdx++;
+    }
+
+    // Create overflow pages for remaining lines
+    $overflowPages = [];
+    $overflowAnnots = [];
+    $remaining = array_slice($lines, $lineIdx);
+    while (!empty($remaining)) {
+        $oCmds = [];
+        $oAnnots = [];
+        $oBoxTop = 30;
+        $oY = $oBoxTop + 10;
+        $oLineIdx = 0;
+        foreach ($remaining as $line) {
+            if ($oY + $lineH > $maxPageY) {
+                break;
+            }
+            if ($richText) {
+                foreach (allu_form_pdf_rich_text_line($line, $textX, $yt($oY, $fontSize), $fontSize) as $c) {
+                    $oCmds[] = $c;
+                }
+                foreach (allu_form_pdf_detect_url_annotations($line, $textX, $yt($oY, $fontSize), $fontSize, $pageH) as $ua) {
+                    $oAnnots[] = $ua;
+                }
+            } else {
+                $oCmds[] = allu_form_pdf_text_command($line, $textX, $yt($oY, $fontSize), $fontSize);
+            }
+            $oY += $lineH;
+            $oLineIdx++;
+        }
+        $oBoxBot = min($oY + 5, $maxPageY);
+        $oCmds[] = allu_form_pdf_stroke_color(0, 0, 0);
+        $oCmds[] = '0.50 w';
+        $oCmds[] = allu_form_pdf_rect_command($boxX, $pageH - $oBoxBot, $boxW, $oBoxBot - $oBoxTop, false);
+        $overflowPages[] = $oCmds;
+        $overflowAnnots[] = $oAnnots;
+        $remaining = array_slice($remaining, $oLineIdx);
+    }
+
+    return ['endY' => $maxPageY, 'overflowPages' => $overflowPages, 'overflowAnnots' => $overflowAnnots];
+}
+
 function allu_form_generate_submission_pdf(array $submission, string $path): bool
 {
     $doctor = $submission['doctor'] ?? [];
@@ -1166,8 +1293,9 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
         $indication .= ' - ' . $other;
     }
 
-    // Collect URL annotations per page: pageIndex => [[url, x, y, w, h], ...]
-    $pageAnnotations = array_fill(0, PDF_TOTAL_PAGES, []);
+    // Dynamic page collection (pages + annotations added as built)
+    $allPages = [];
+    $allAnnotations = [];
 
     // Page dimensions (A4: 595.28 x 841.89)
     $pageW = 595.28;
@@ -1181,7 +1309,15 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
     $pG = MEDSAFE_PURPLE_G;
     $pB = MEDSAFE_PURPLE_B;
 
-    $totalPages = PDF_TOTAL_PAGES;
+    // Maximum Y from page top before footer area
+    $maxPageY = 800;
+
+    // Common text box parameters
+    $textBoxX = 47.83;
+    $textBoxW = 573.17 - 47.83;
+    $textBoxTextX = 52;
+    $textBoxLineH = 12;
+    $textBoxFontSize = 9;
 
     // Helper: convert reference top-Y to PDF baseline Y
     $yt = fn(float $topY, float $size) => allu_form_pdf_y_from_top($topY, $size, $pageH);
@@ -1287,12 +1423,15 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
         $bulletY += 6;
     }
 
-    $p1[] = allu_form_pdf_medsafe_footer(1, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+    // Page 1 footer will be added at the end; add page to collection
+    $allPages[] = $p1;
+    $allAnnotations[] = [];
 
     // ============================================================
     // PAGE 2: Section 1 - Applicant
     // ============================================================
     $p2 = [];
+    $p2Annots = [];
 
     // Section title
     $p2[] = allu_form_pdf_fill_color($pR, $pG, $pB);
@@ -1392,44 +1531,55 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
     $p2[] = allu_form_pdf_fill_color(0, 0, 0);
     $p2[] = allu_form_pdf_text_command('Yes, please specify:', 63.1, $yt(361.0, 10), 10);
 
-    // Vocational scope text box
-    $p2[] = allu_form_pdf_rect_command(47.83, $pageH - 429.17, 573.17 - 47.83, 429.17 - 380.84, false);
+    // Vocational scope text box (auto-expanding)
+    $vocScopeLines = $hasScope ? allu_form_pdf_word_wrap($vocScope, 90) : [];
+    $vocScopeBoxTopY = 380.84;
+    $vocScopeMinH = 48.33;
+    $vocScopeTextH = count($vocScopeLines) * 12;
+    $vocScopeBoxH = max($vocScopeMinH, (393 - $vocScopeBoxTopY) + $vocScopeTextH + 5);
+    $vocScopeBoxBotY = $vocScopeBoxTopY + $vocScopeBoxH;
+    $p2[] = allu_form_pdf_rect_command(47.83, $pageH - $vocScopeBoxBotY, $textBoxW, $vocScopeBoxH, false);
     if ($hasScope) {
-        $scopeLines = allu_form_pdf_word_wrap($vocScope, 90);
         $scopeY = 393;
-        foreach ($scopeLines as $sl) {
+        foreach ($vocScopeLines as $sl) {
             $p2[] = allu_form_pdf_text_command($sl, 52, $yt($scopeY, 9), 9);
             $scopeY += 12;
         }
     }
 
-    // "Clinical expertise and training" sub-heading
-    $p2[] = allu_form_pdf_bold_text_command('Clinical expertise and training', $margin, $yt(448.8, 10), 10);
+    // "Clinical expertise and training" sub-heading (shifted by vocational scope box)
+    $clinHeaderY = $vocScopeBoxBotY + 19.63;
+    $p2[] = allu_form_pdf_bold_text_command('Clinical expertise and training', $margin, $yt($clinHeaderY, 10), 10);
 
     // Clinical experience question
-    $p2[] = allu_form_pdf_text_command('1.9. Describe the clinical experience and training you hold that is applicable to the proposed use of the product:', $bodyMargin, $yt(469.5, 10), 10);
+    $clinQuestionY = $clinHeaderY + 20.7;
+    $p2[] = allu_form_pdf_text_command('1.9. Describe the clinical experience and training you hold that is applicable to the proposed use of the product:', $bodyMargin, $yt($clinQuestionY, 10), 10);
 
-    // Large text box for clinical experience
-    $p2[] = allu_form_pdf_rect_command(47.83, $pageH - 798.17, 573.17 - 47.83, 798.17 - 488.84, false);
+    // Large text box for clinical experience (auto-expanding with overflow)
     $expText = (string)($form['clinical_experience'] ?? '');
-    if ($expText !== '') {
-        $expLines = allu_form_pdf_word_wrap($expText, 90);
-        $expY = 500;
-        foreach ($expLines as $el) {
-            if ($expY > 790) {
-                break;
-            }
-            $p2[] = allu_form_pdf_text_command($el, 52, $yt($expY, 9), 9);
-            $expY += 12;
-        }
+    $expLines = ($expText !== '') ? allu_form_pdf_word_wrap($expText, 90) : [];
+    $clinBoxTopY = $clinQuestionY + 19.34;
+    $clinResult = allu_form_pdf_expanding_text_box(
+        $p2, $p2Annots, $expLines,
+        $textBoxX, $clinBoxTopY, $textBoxW, 309.33,
+        $textBoxTextX, $clinBoxTopY + 11, $textBoxLineH, $textBoxFontSize,
+        $maxPageY, $pageH, $yt
+    );
+
+    $allPages[] = $p2;
+    $allAnnotations[] = $p2Annots;
+    foreach ($clinResult['overflowPages'] as $i => $oCmds) {
+        $allPages[] = $oCmds;
+        $allAnnotations[] = $clinResult['overflowAnnots'][$i] ?? [];
     }
 
-    $p2[] = allu_form_pdf_medsafe_footer(2, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
-
     // ============================================================
-    // PAGE 3: Section 2 - Product Details
+    // PAGE 3: Section 2 - Product Details (dynamic product table)
     // ============================================================
+    $p3Pages = [];
+    $p3Annots = [];
     $p3 = [];
+    $p3CurAnnots = [];
 
     $p3[] = allu_form_pdf_fill_color($pR, $pG, $pB);
     $p3[] = allu_form_pdf_bold_text_command('Section 2: Product Details', $margin, $yt(17.7, 18), 18);
@@ -1438,16 +1588,13 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
     // Question 2.1
     $p3[] = allu_form_pdf_text_command('2.1. This Application is being made to prescribe/supply/administer the following product(s):', $bodyMargin, $yt(68.3, 10), 10);
 
-    // Product table - outer border
+    // Product table - dynamic rows based on product count
     $tableTop = 135.0;
-    $tableBot = 437.66;
     $tableX = 45.0;
     $tableR = 567.83;
     $tableW_total = $tableR - $tableX;
-    $tableH = $tableBot - $tableTop;
-    $p3[] = allu_form_pdf_stroke_color(0, 0, 0);
-    $p3[] = '0.50 w';
-    $p3[] = allu_form_pdf_rect_command($tableX, $pageH - $tableBot, $tableW_total, $tableH, false);
+    $hdrRowBot = 163.37;
+    $rowH = 54.86;
 
     // Column positions
     $colX = [45.0, 224.97, 339.26, 453.55, 567.83];
@@ -1456,8 +1603,24 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
         $colW[] = $colX[$c + 1] - $colX[$c];
     }
 
+    $numProducts = count($products);
+    $numDataRows = max(5, $numProducts);
+
+    // Calculate how many rows fit per page
+    $firstPageMaxRows = (int)floor(($maxPageY - $hdrRowBot) / $rowH);
+    $contPageMaxRows = (int)floor(($maxPageY - 30) / $rowH);
+
+    // Render product table - first page
+    $rowsRenderedOnPage = 0;
+    $rowsOnFirstPage = min($numDataRows, $firstPageMaxRows);
+    $tableBot = $hdrRowBot + $rowsOnFirstPage * $rowH;
+
+    // Outer border for first page table
+    $p3[] = allu_form_pdf_stroke_color(0, 0, 0);
+    $p3[] = '0.50 w';
+    $p3[] = allu_form_pdf_rect_command($tableX, $pageH - $tableBot, $tableW_total, $tableBot - $tableTop, false);
+
     // Header row
-    $hdrRowBot = 163.37;
     $p3[] = allu_form_pdf_rect_command($tableX, $pageH - $hdrRowBot, $colX[1] - $tableX, $hdrRowBot - $tableTop, false);
 
     // Column headers
@@ -1466,17 +1629,12 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
     $p3[] = allu_form_pdf_bold_text_command('Strength', 375.8, $yt(141.5, 10), 10);
     $p3[] = allu_form_pdf_bold_text_command('Form', 498.2, $yt(141.5, 10), 10);
 
-    // Data rows
-    $rowTops = [163.37, 218.23, 273.08, 327.94, 382.80];
-    $rowBots = [218.23, 273.08, 327.94, 382.80, 437.66];
-    $maxRows = count($rowTops);
-
-    for ($r = 0; $r < $maxRows; $r++) {
-        $rTop = $rowTops[$r];
-        $rBot = $rowBots[$r];
-        $rH = $rBot - $rTop;
+    // Data rows on first page
+    for ($r = 0; $r < $rowsOnFirstPage; $r++) {
+        $rTop = $hdrRowBot + $r * $rowH;
+        $rBot = $rTop + $rowH;
         for ($c = 0; $c < 4; $c++) {
-            $p3[] = allu_form_pdf_rect_command($colX[$c], $pageH - $rBot, $colW[$c], $rH, false);
+            $p3[] = allu_form_pdf_rect_command($colX[$c], $pageH - $rBot, $colW[$c], $rowH, false);
         }
         if (isset($products[$r])) {
             $row = $products[$r];
@@ -1487,128 +1645,235 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
             $p3[] = allu_form_pdf_text_command((string)($row['form'] ?? ''), $colX[3] + 4, $yt($cellTextY, 9), 9);
         }
     }
+    $rowsRenderedOnPage = $rowsOnFirstPage;
+    $remainingRows = $numDataRows - $rowsOnFirstPage;
 
-    // Question 2.2 - Sourcing
-    $p3[] = allu_form_pdf_text_command('2.2. Describe where the above product(s) are intended to be sourced from:', $bodyMargin, $yt(469.5, 10), 10);
-
-    // Sourcing text box
-    $p3[] = allu_form_pdf_rect_command(47.83, $pageH - 798.17, 573.17 - 47.83, 798.17 - 488.84, false);
+    // If product table needs more rows, check if sourcing fits on this page
     $sourcingNotes = (string)($form['sourcing_notes'] ?? '');
-    if ($sourcingNotes !== '') {
-        $srcLines = allu_form_pdf_word_wrap($sourcingNotes, 90);
-        $srcY = 500;
-        foreach ($srcLines as $sl) {
-            if ($srcY > 790) {
-                break;
+    $srcLines = ($sourcingNotes !== '') ? allu_form_pdf_word_wrap($sourcingNotes, 90) : [];
+
+    if ($remainingRows <= 0) {
+        // All products fit - render sourcing on same page
+        $srcQuestionY = $tableBot + 32;
+        $srcBoxTopY = $srcQuestionY + 19.34;
+
+        // Check if sourcing section fits on this page
+        if ($srcQuestionY < $maxPageY - 50) {
+            $p3[] = allu_form_pdf_text_command('2.2. Describe where the above product(s) are intended to be sourced from:', $bodyMargin, $yt($srcQuestionY, 10), 10);
+
+            $srcResult = allu_form_pdf_expanding_text_box(
+                $p3, $p3CurAnnots, $srcLines,
+                $textBoxX, $srcBoxTopY, $textBoxW, min(309.33, $maxPageY - $srcBoxTopY),
+                $textBoxTextX, $srcBoxTopY + 11, $textBoxLineH, $textBoxFontSize,
+                $maxPageY, $pageH, $yt, true
+            );
+
+            $p3Pages[] = $p3;
+            $p3Annots[] = $p3CurAnnots;
+            foreach ($srcResult['overflowPages'] as $i => $oCmds) {
+                $p3Pages[] = $oCmds;
+                $p3Annots[] = $srcResult['overflowAnnots'][$i] ?? [];
             }
-            $cmds = allu_form_pdf_rich_text_line($sl, 52, $yt($srcY, 9), 9);
-            foreach ($cmds as $cmd) {
-                $p3[] = $cmd;
+        } else {
+            // No room for sourcing on this page - put on next page
+            $p3Pages[] = $p3;
+            $p3Annots[] = $p3CurAnnots;
+
+            $srcPage = [];
+            $srcPageAnnots = [];
+            $srcPage[] = allu_form_pdf_text_command('2.2. Describe where the above product(s) are intended to be sourced from:', $bodyMargin, $yt(30, 10), 10);
+            $srcResult = allu_form_pdf_expanding_text_box(
+                $srcPage, $srcPageAnnots, $srcLines,
+                $textBoxX, 50, $textBoxW, 309.33,
+                $textBoxTextX, 61, $textBoxLineH, $textBoxFontSize,
+                $maxPageY, $pageH, $yt, true
+            );
+            $p3Pages[] = $srcPage;
+            $p3Annots[] = $srcPageAnnots;
+            foreach ($srcResult['overflowPages'] as $i => $oCmds) {
+                $p3Pages[] = $oCmds;
+                $p3Annots[] = $srcResult['overflowAnnots'][$i] ?? [];
             }
-            $srcY += 12;
+        }
+    } else {
+        // Product table overflows - save current page, create continuation pages
+        $p3Pages[] = $p3;
+        $p3Annots[] = $p3CurAnnots;
+
+        $productIdx = $rowsOnFirstPage;
+        while ($remainingRows > 0) {
+            $contPage = [];
+            $contAnnots = [];
+            $contTop = 30;
+            $rowsOnThisPage = min($remainingRows, $contPageMaxRows);
+            $contBot = $contTop + $rowsOnThisPage * $rowH;
+
+            $contPage[] = allu_form_pdf_stroke_color(0, 0, 0);
+            $contPage[] = '0.50 w';
+            $contPage[] = allu_form_pdf_rect_command($tableX, $pageH - $contBot, $tableW_total, $contBot - $contTop, false);
+
+            for ($r = 0; $r < $rowsOnThisPage; $r++) {
+                $rTop = $contTop + $r * $rowH;
+                $rBot = $rTop + $rowH;
+                for ($c = 0; $c < 4; $c++) {
+                    $contPage[] = allu_form_pdf_rect_command($colX[$c], $pageH - $rBot, $colW[$c], $rowH, false);
+                }
+                if (isset($products[$productIdx])) {
+                    $row = $products[$productIdx];
+                    $cellTextY = $rTop + 12;
+                    $contPage[] = allu_form_pdf_text_command((string)($row['name'] ?? ''), $colX[0] + 4, $yt($cellTextY, 9), 9);
+                    $contPage[] = allu_form_pdf_text_command((string)($row['component'] ?? ''), $colX[1] + 4, $yt($cellTextY, 9), 9);
+                    $contPage[] = allu_form_pdf_text_command((string)($row['strength'] ?? ''), $colX[2] + 4, $yt($cellTextY, 9), 9);
+                    $contPage[] = allu_form_pdf_text_command((string)($row['form'] ?? ''), $colX[3] + 4, $yt($cellTextY, 9), 9);
+                }
+                $productIdx++;
+            }
+            $remainingRows -= $rowsOnThisPage;
+
+            // If this is the last table page and there's room, add sourcing on this page
+            if ($remainingRows <= 0) {
+                $srcQuestionY = $contBot + 32;
+                if ($srcQuestionY < $maxPageY - 50) {
+                    $contPage[] = allu_form_pdf_text_command('2.2. Describe where the above product(s) are intended to be sourced from:', $bodyMargin, $yt($srcQuestionY, 10), 10);
+                    $srcBoxTopY = $srcQuestionY + 19.34;
+                    $srcResult = allu_form_pdf_expanding_text_box(
+                        $contPage, $contAnnots, $srcLines,
+                        $textBoxX, $srcBoxTopY, $textBoxW, min(309.33, $maxPageY - $srcBoxTopY),
+                        $textBoxTextX, $srcBoxTopY + 11, $textBoxLineH, $textBoxFontSize,
+                        $maxPageY, $pageH, $yt, true
+                    );
+                    $p3Pages[] = $contPage;
+                    $p3Annots[] = $contAnnots;
+                    foreach ($srcResult['overflowPages'] as $i => $oCmds) {
+                        $p3Pages[] = $oCmds;
+                        $p3Annots[] = $srcResult['overflowAnnots'][$i] ?? [];
+                    }
+                } else {
+                    $p3Pages[] = $contPage;
+                    $p3Annots[] = $contAnnots;
+                    // Sourcing on new page
+                    $srcPage = [];
+                    $srcPageAnnots = [];
+                    $srcPage[] = allu_form_pdf_text_command('2.2. Describe where the above product(s) are intended to be sourced from:', $bodyMargin, $yt(30, 10), 10);
+                    $srcResult = allu_form_pdf_expanding_text_box(
+                        $srcPage, $srcPageAnnots, $srcLines,
+                        $textBoxX, 50, $textBoxW, 309.33,
+                        $textBoxTextX, 61, $textBoxLineH, $textBoxFontSize,
+                        $maxPageY, $pageH, $yt, true
+                    );
+                    $p3Pages[] = $srcPage;
+                    $p3Annots[] = $srcPageAnnots;
+                    foreach ($srcResult['overflowPages'] as $i => $oCmds) {
+                        $p3Pages[] = $oCmds;
+                        $p3Annots[] = $srcResult['overflowAnnots'][$i] ?? [];
+                    }
+                }
+            } else {
+                $p3Pages[] = $contPage;
+                $p3Annots[] = $contAnnots;
+            }
         }
     }
 
-    $p3[] = allu_form_pdf_medsafe_footer(3, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+    foreach ($p3Pages as $i => $pageCmds) {
+        $allPages[] = $pageCmds;
+        $allAnnotations[] = $p3Annots[$i] ?? [];
+    }
 
     // ============================================================
-    // PAGE 4: Section 3 - Treatment Protocol
+    // PAGE 4: Section 3 - Treatment Protocol (cursor-based layout)
     // ============================================================
-    $p4 = [];
+    $p4Sections = [
+        [
+            'question' => '3.1. What is the indication the product(s) are proposed to be used for?',
+            'text' => $indication,
+            'minBoxH' => 93.33,
+            'richText' => false,
+        ],
+        [
+            'question' => '3.2. Provide supporting evidence/information to support use of the product(s) for the intended indication.',
+            'text' => (string)($form['supporting_evidence_notes'] ?? ''),
+            'minBoxH' => 91.33,
+            'richText' => true,
+        ],
+        [
+            'question' => '3.3. Provide a copy of the current treatment protocol.',
+            'text' => (string)($form['treatment_protocol_notes'] ?? ''),
+            'minBoxH' => 91.33,
+            'richText' => true,
+        ],
+        [
+            'question' => '3.4. Describe where you will be administering and monitoring the treatment:',
+            'text' => (string)($form['admin_monitoring_notes'] ?? ''),
+            'minBoxH' => 200,
+            'richText' => true,
+        ],
+    ];
 
-    $p4[] = allu_form_pdf_fill_color($pR, $pG, $pB);
-    $p4[] = allu_form_pdf_bold_text_command('Section 3: Treatment Protocol', $margin, $yt(17.9, 18), 18);
-    $p4[] = allu_form_pdf_fill_color(0, 0, 0);
+    $p4Cmds = [];
+    $p4CurAnnots = [];
+    $cursorY = 17.9;
 
-    // 3.1 Indication
-    $p4[] = allu_form_pdf_text_command('3.1. What is the indication the product(s) are proposed to be used for?', $bodyMargin, $yt(64.5, 10), 10);
-    $p4[] = allu_form_pdf_rect_command(47.83, $pageH - 177.17, 573.17 - 47.83, 177.17 - 83.84, false);
-    if ($indication !== '') {
-        $indLines = allu_form_pdf_word_wrap($indication, 90);
-        $indY = 95;
-        foreach ($indLines as $il) {
-            $p4[] = allu_form_pdf_text_command($il, 52, $yt($indY, 9), 9);
-            $indY += 12;
+    // Section header
+    $p4Cmds[] = allu_form_pdf_fill_color($pR, $pG, $pB);
+    $p4Cmds[] = allu_form_pdf_bold_text_command('Section 3: Treatment Protocol', $margin, $yt($cursorY, 18), 18);
+    $p4Cmds[] = allu_form_pdf_fill_color(0, 0, 0);
+    $cursorY += 46;
+
+    foreach ($p4Sections as $sec) {
+        // Check if question fits on current page
+        if ($cursorY + 40 > $maxPageY) {
+            $allPages[] = $p4Cmds;
+            $allAnnotations[] = $p4CurAnnots;
+            $p4Cmds = [];
+            $p4CurAnnots = [];
+            $cursorY = 30;
+        }
+
+        // Question text
+        $p4Cmds[] = allu_form_pdf_text_command($sec['question'], $bodyMargin, $yt($cursorY, 10), 10);
+        $cursorY += 20;
+
+        // Text box
+        $boxTopY = $cursorY;
+        $textStartY = $cursorY + 11;
+        $lines = allu_form_pdf_word_wrap($sec['text'], 90);
+        $availableH = $maxPageY - $boxTopY;
+        $effectiveMinH = min($sec['minBoxH'], max(50, $availableH));
+
+        $result = allu_form_pdf_expanding_text_box(
+            $p4Cmds, $p4CurAnnots, $lines,
+            $textBoxX, $boxTopY, $textBoxW, $effectiveMinH,
+            $textBoxTextX, $textStartY, $textBoxLineH, $textBoxFontSize,
+            $maxPageY, $pageH, $yt, $sec['richText']
+        );
+
+        if (!empty($result['overflowPages'])) {
+            // Save current page
+            $allPages[] = $p4Cmds;
+            $allAnnotations[] = $p4CurAnnots;
+            // Add all overflow pages
+            foreach ($result['overflowPages'] as $i => $oCmds) {
+                $allPages[] = $oCmds;
+                $allAnnotations[] = $result['overflowAnnots'][$i] ?? [];
+            }
+            // Start fresh page for next section
+            $p4Cmds = [];
+            $p4CurAnnots = [];
+            $cursorY = 30;
+        } else {
+            $cursorY = $result['endY'] + 22;
         }
     }
 
-    // 3.2 Supporting evidence
-    $p4[] = allu_form_pdf_text_command('3.2. Provide supporting evidence/information to support use of the product(s) for the intended indication.', $bodyMargin, $yt(199.5, 10), 10);
-    $p4[] = allu_form_pdf_stroke_color(0, 0, 0);
-    $p4[] = '0.50 w';
-    $p4[] = allu_form_pdf_rect_command(47.83, $pageH - 310.17, 573.17 - 47.83, 310.17 - 218.84, false);
-    $evText = (string)($form['supporting_evidence_notes'] ?? '');
-    if ($evText !== '') {
-        $evLines = allu_form_pdf_word_wrap($evText, 90);
-        $evY = 230;
-        foreach ($evLines as $el) {
-            if ($evY > 302) {
-                break;
-            }
-            $cmds = allu_form_pdf_rich_text_line($el, 52, $yt($evY, 9), 9);
-            foreach ($cmds as $cmd) {
-                $p4[] = $cmd;
-            }
-            $urlAnnots = allu_form_pdf_detect_url_annotations($el, 52, $yt($evY, 9), 9, $pageH);
-            foreach ($urlAnnots as $ua) {
-                $pageAnnotations[3][] = $ua;
-            }
-            $evY += 12;
-        }
-    }
-
-    // 3.3 Treatment protocol
-    $p4[] = allu_form_pdf_text_command('3.3. Provide a copy of the current treatment protocol.', $bodyMargin, $yt(332.5, 10), 10);
-    $p4[] = allu_form_pdf_rect_command(47.83, $pageH - 443.17, 573.17 - 47.83, 443.17 - 351.84, false);
-    $protText = (string)($form['treatment_protocol_notes'] ?? '');
-    if ($protText !== '') {
-        $protLines = allu_form_pdf_word_wrap($protText, 90);
-        $protY = 363;
-        foreach ($protLines as $pl) {
-            if ($protY > 435) {
-                break;
-            }
-            $cmds = allu_form_pdf_rich_text_line($pl, 52, $yt($protY, 9), 9);
-            foreach ($cmds as $cmd) {
-                $p4[] = $cmd;
-            }
-            $urlAnnots = allu_form_pdf_detect_url_annotations($pl, 52, $yt($protY, 9), 9, $pageH);
-            foreach ($urlAnnots as $ua) {
-                $pageAnnotations[3][] = $ua;
-            }
-            $protY += 12;
-        }
-    }
-
-    // 3.4 Administering location
-    $p4[] = allu_form_pdf_text_command('3.4. Describe where you will be administering and monitoring the treatment:', $bodyMargin, $yt(465.5, 10), 10);
-    $p4[] = allu_form_pdf_rect_command(47.83, $pageH - 798.17, 573.17 - 47.83, 798.17 - 484.84, false);
-    $adminText = (string)($form['admin_monitoring_notes'] ?? '');
-    if ($adminText !== '') {
-        $adminLines = allu_form_pdf_word_wrap($adminText, 90);
-        $adminY = 496;
-        foreach ($adminLines as $al) {
-            if ($adminY > 790) {
-                break;
-            }
-            $cmds = allu_form_pdf_rich_text_line($al, 52, $yt($adminY, 9), 9);
-            foreach ($cmds as $cmd) {
-                $p4[] = $cmd;
-            }
-            $urlAnnots = allu_form_pdf_detect_url_annotations($al, 52, $yt($adminY, 9), 9, $pageH);
-            foreach ($urlAnnots as $ua) {
-                $pageAnnotations[3][] = $ua;
-            }
-            $adminY += 12;
-        }
-    }
-
-    $p4[] = allu_form_pdf_medsafe_footer(4, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+    $allPages[] = $p4Cmds;
+    $allAnnotations[] = $p4CurAnnots;
 
     // ============================================================
-    // PAGE 5: Section 4 - Scientific Peer Review
+    // PAGE 5: Section 4 - Scientific Peer Review (expandable)
     // ============================================================
     $p5 = [];
+    $p5Annots = [];
 
     $p5[] = allu_form_pdf_fill_color($pR, $pG, $pB);
     $p5[] = allu_form_pdf_bold_text_command('Section 4: Scientific Peer Review', $margin, $yt(17.7, 18), 18);
@@ -1617,29 +1882,22 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
     // 4.1 Question
     $p5[] = allu_form_pdf_text_command('4.1. Describe the scientific peer review activities that are implemented/proposed, and details of any support networks:', $bodyMargin, $yt(64.5, 10), 10);
 
-    // Large text box
-    $p5[] = allu_form_pdf_rect_command(47.83, $pageH - 726.17, 573.17 - 47.83, 726.17 - 119.84, false);
+    // Large text box (auto-expanding with overflow)
     $peerText = (string)($form['scientific_peer_review_notes'] ?? '');
-    if ($peerText !== '') {
-        $prLines = allu_form_pdf_word_wrap($peerText, 90);
-        $prY = 132;
-        foreach ($prLines as $pl) {
-            if ($prY > 718) {
-                break;
-            }
-            $cmds = allu_form_pdf_rich_text_line($pl, 52, $yt($prY, 9), 9);
-            foreach ($cmds as $cmd) {
-                $p5[] = $cmd;
-            }
-            $urlAnnots = allu_form_pdf_detect_url_annotations($pl, 52, $yt($prY, 9), 9, $pageH);
-            foreach ($urlAnnots as $ua) {
-                $pageAnnotations[4][] = $ua;
-            }
-            $prY += 12;
-        }
-    }
+    $prLines = ($peerText !== '') ? allu_form_pdf_word_wrap($peerText, 90) : [];
+    $p5Result = allu_form_pdf_expanding_text_box(
+        $p5, $p5Annots, $prLines,
+        $textBoxX, 119.84, $textBoxW, 606.33,
+        $textBoxTextX, 132, $textBoxLineH, $textBoxFontSize,
+        $maxPageY, $pageH, $yt, true
+    );
 
-    $p5[] = allu_form_pdf_medsafe_footer(5, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+    $allPages[] = $p5;
+    $allAnnotations[] = $p5Annots;
+    foreach ($p5Result['overflowPages'] as $i => $oCmds) {
+        $allPages[] = $oCmds;
+        $allAnnotations[] = $p5Result['overflowAnnots'][$i] ?? [];
+    }
 
     // ============================================================
     // PAGE 6: Section 5 - Declaration & Signature
@@ -1685,8 +1943,10 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
 
     $p6[] = allu_form_pdf_bold_text_command('Signature', 415.4, $yt(223.8, 10), 10);
 
-    // Signature boxes
-    $sigDrawn = (string)($form['signature_drawn'] ?? '');
+    // Signature boxes - respect signature_mode to determine which signature to use
+    $sigMode = (string)($form['signature_mode'] ?? '');
+    $sigDrawn = ($sigMode !== 'upload') ? (string)($form['signature_drawn'] ?? '') : '';
+    $sigUploadPath = ($sigMode === 'upload') ? (string)($form['signature_upload'] ?? '') : '';
     $sigBoxY = $pageH - 306.0;  // PDF coords for bottom of signature box
     $sigBoxH = 54.0;
 
@@ -1701,28 +1961,29 @@ function allu_form_generate_submission_pdf(array $submission, string $path): boo
     $p6[] = allu_form_pdf_stroke_color(0, 0, 0);
     $p6[] = allu_form_pdf_rect_command(414.0, $sigBoxY, 153.0, $sigBoxH, false);
 
-    $sigUploadPath = (string)($form['signature_upload'] ?? '');
-    if ($sigDrawn !== '') {
+    if ($sigMode === 'draw' && $sigDrawn !== '') {
         $p6[] = allu_form_pdf_fill_color(0, 0, 0);
         $p6[] = allu_form_pdf_text_command('[Signature provided]', 420, $sigBoxY + 20, 9);
-    } elseif ($sigUploadPath !== '') {
+    } elseif ($sigMode === 'upload' && $sigUploadPath !== '') {
         $p6[] = allu_form_pdf_fill_color(0, 0, 0);
-        $p6[] = allu_form_pdf_text_command('[Signature provided]', 240, $sigBoxY + 20, 9);
+        $p6[] = allu_form_pdf_text_command('[Signature image]', 250, $sigBoxY + 20, 9);
     }
 
     $p6[] = allu_form_pdf_fill_color(0, 0, 0);
-    $p6[] = allu_form_pdf_medsafe_footer(6, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
 
-    // Build streams
+    // Add signature page to collection (always last)
+    $allPages[] = $p6;
+    $allAnnotations[] = [];
+
+    // Add footers to all pages and build streams
+    $totalPages = count($allPages);
     $streams = [];
-    $streams[] = allu_form_build_pdf_page_stream([], $p1);
-    $streams[] = allu_form_build_pdf_page_stream([], $p2);
-    $streams[] = allu_form_build_pdf_page_stream([], $p3);
-    $streams[] = allu_form_build_pdf_page_stream([], $p4);
-    $streams[] = allu_form_build_pdf_page_stream([], $p5);
-    $streams[] = allu_form_build_pdf_page_stream([], $p6);
+    foreach ($allPages as $idx => $pageCmds) {
+        $pageCmds[] = allu_form_pdf_medsafe_footer($idx + 1, $totalPages, $pageW, $pageH, $pR, $pG, $pB);
+        $streams[] = allu_form_build_pdf_page_stream([], $pageCmds);
+    }
 
-    return allu_form_write_multi_page_pdf($path, $streams, $sigDrawn, $sigBoxY, $sigUploadPath, $logoPath, $pageAnnotations);
+    return allu_form_write_multi_page_pdf($path, $streams, $sigDrawn, $sigBoxY, $sigUploadPath, $logoPath, $allAnnotations);
 }
 
 function allu_form_build_submission_product_rows(array $submission): array
