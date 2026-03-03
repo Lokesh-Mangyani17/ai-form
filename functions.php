@@ -964,6 +964,9 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $applicationDate) || !checkdate((int)substr($applicationDate, 5, 2), (int)substr($applicationDate, 8, 2), (int)substr($applicationDate, 0, 4))) {
         return [false, null, 'Application date must be a valid date in YYYY-MM-DD format.', null];
     }
+    if ($applicationDate > date('Y-m-d')) {
+        return [false, null, 'Application date cannot be in the future.', null];
+    }
 
     $signatureDrawn = trim($post['signature_drawn'] ?? '');
     $signatureMode = $post['signature_mode'] ?? '';
@@ -2411,9 +2414,10 @@ function allu_form_pdf_escape(string $text): string
     ];
     $text = strtr($text, $unicodeMap);
 
-    // Strip any remaining multi-byte characters outside WinAnsiEncoding (0x00-0xFF)
-    // to prevent broken glyph output. Keep printable Latin-1 range.
-    $text = preg_replace('/[^\x00-\xFF]/u', '?', $text) ?? $text;
+    // Strip any remaining multi-byte characters outside WinAnsiEncoding
+    // to prevent broken glyph output. Keep printable Latin-1 range (0x20-0xFF)
+    // plus tab (0x09) and newline (0x0A) which are collapsed by whitespace normalization.
+    $text = preg_replace('/[^\x09\x0A\x20-\xFF]/u', '?', $text) ?? $text;
 
     $text = preg_replace('/\s+/', ' ', trim($text)) ?? '';
     return str_replace(['\\', '(', ')'], ['\\\\', '\(', '\)'], $text);
@@ -2820,6 +2824,7 @@ function allu_form_render_shortcode(): string
             // Standalone product management removed – products are managed via WooCommerce.
 
             if ($action === 'email_pdf' && allu_form_is_admin_page()) {
+                // Defense-in-depth: also validated by the admin page gate above.
                 if (!current_user_can('manage_options')) {
                     wp_die('Unauthorized');
                 }
