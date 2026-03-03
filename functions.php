@@ -79,18 +79,47 @@ function allu_form_handle_file_downloads(): void
     }
 
     if ($raw_action === 'download_pdf') {
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'allu_form_download')) {
+            wp_die('Security check failed.');
+        }
+        allu_form_require_download_access(sanitize_text_field(wp_unslash($_GET['id'] ?? '')));
         allu_form_bootstrap_storage();
         allu_form_download_pdf(sanitize_text_field(wp_unslash($_GET['id'] ?? '')));
         exit;
     }
 
     if ($raw_action === 'download_support') {
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'allu_form_download')) {
+            wp_die('Security check failed.');
+        }
+        allu_form_require_download_access(sanitize_text_field(wp_unslash($_GET['submission_id'] ?? '')));
         allu_form_bootstrap_storage();
         allu_form_download_support_document(
             sanitize_text_field(wp_unslash($_GET['submission_id'] ?? '')),
             sanitize_text_field(wp_unslash($_GET['file'] ?? ''))
         );
         exit;
+    }
+}
+
+/**
+ * Verify the current user is logged in and is either the submission owner or an admin.
+ */
+function allu_form_require_download_access(string $submissionId): void
+{
+    if (!is_user_logged_in()) {
+        wp_die('Unauthorized');
+    }
+
+    allu_form_bootstrap_storage();
+    $submission = allu_form_find_submission($submissionId);
+    if (!$submission) {
+        return; // Let the download function handle 404.
+    }
+
+    $current_user = wp_get_current_user();
+    if ((int)$submission['doctor']['id'] !== (int)$current_user->ID && !current_user_can('manage_options')) {
+        wp_die('Forbidden');
     }
 }
 
@@ -930,6 +959,15 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
     if (trim((string)($post['clinical_experience'] ?? '')) === '') {
         return [false, null, 'Clinical Experience & Training is required.', null];
     }
+    if (strlen((string)($post['clinical_experience'] ?? '')) > 10000) {
+        return [false, null, 'Clinical Experience & Training must be under 10,000 characters.', null];
+    }
+    $textFields = ['sourcing_notes', 'supporting_evidence_notes', 'treatment_protocol_notes', 'scientific_peer_review_notes', 'admin_monitoring_notes'];
+    foreach ($textFields as $tf) {
+        if (strlen((string)($post[$tf] ?? '')) > 10000) {
+            return [false, null, ucfirst(str_replace('_', ' ', $tf)) . ' must be under 10,000 characters.', null];
+        }
+    }
     if (trim((string)($post['application_date'] ?? '')) === '') {
         return [false, null, 'Application date is required.', null];
     }
@@ -939,6 +977,25 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
     $signatureUploadPath = null;
 
     if ($signatureMode === 'upload' && !empty($files['signature_upload']['name'])) {
+        $allowedMimes = ['image/jpeg', 'image/png'];
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $realType = finfo_file($finfo, $files['signature_upload']['tmp_name']);
+        finfo_close($finfo);
+
+        if (!in_array($realType, $allowedMimes, true)) {
+            return [false, null, 'Signature upload must be a JPEG or PNG image.', null];
+        }
+
+        $ext = strtolower(pathinfo($files['signature_upload']['name'], PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'png'], true)) {
+            return [false, null, 'Signature file must have a .jpg, .jpeg, or .png extension.', null];
+        }
+
+        $maxSize = 2 * 1024 * 1024; // 2 MB
+        if ($files['signature_upload']['size'] > $maxSize) {
+            return [false, null, 'Signature image must be smaller than 2 MB.', null];
+        }
+
         $sigName = uniqid('sig_') . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $files['signature_upload']['name']);
         $target = allu_form_get_submissions_dir() . '/' . $sigName;
         move_uploaded_file($files['signature_upload']['tmp_name'], $target);
@@ -996,7 +1053,7 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
 
     $productNames = array_map(fn($p) => $p['name'], $selectedDetails);
 
-    $id = 'sub-' . date('YmdHis') . '-' . substr(md5(uniqid('', true)), 0, 6);
+    $id = 'sub-' . bin2hex(random_bytes(16));
     $submission = [
         'id' => $id,
         'submitted_at' => date('c'),
@@ -2649,29 +2706,18 @@ function allu_form_email_pdf_to_doctor(string $submissionId): array
         return [false, null, 'PDF missing.'];
     }
 
-    $to = $submission['doctor']['email'];
+    $to = sanitize_email($submission['doctor']['email']);
+    if (!is_email($to)) {
+        return [false, null, 'Invalid doctor email address.'];
+    }
     $subject = 'Prescription Application PDF - ' . $submission['id'];
     $message = "Please find your submitted application attached.\nSubmission: " . $submission['id'];
 
-    $content = chunk_split(base64_encode(file_get_contents($pdfPath)));
-    $separator = md5((string)time());
-    $pdfName = allu_form_get_pdf_download_name($submissionId);
-    $headers = "From: no-reply@exampleclinic.nz\r\n";
-    $headers .= "MIME-Version: 1.0\r\n";
-    $headers .= "Content-Type: multipart/mixed; boundary=\"$separator\"";
-
-    $body = "--$separator\r\n";
-    $body .= "Content-Type: text/plain; charset=\"utf-8\"\r\n\r\n";
-    $body .= $message . "\r\n";
-    $body .= "--$separator\r\n";
-    $body .= "Content-Type: application/pdf; name=\"$pdfName\"\r\n";
-    $body .= "Content-Transfer-Encoding: base64\r\n";
-    $body .= "Content-Disposition: attachment; filename=\"$pdfName\"\r\n\r\n";
-    $body .= $content . "\r\n";
-    $body .= "--$separator--";
-
-    @mail($to, $subject, $body, $headers);
-    return [true, 'Email dispatch attempted using PHP mail().', null];
+    $sent = wp_mail($to, $subject, $message, [], [$pdfPath]);
+    if (!$sent) {
+        return [false, null, 'Email delivery failed.'];
+    }
+    return [true, 'Email sent successfully.', null];
 }
 
 // ── Shortcode Handler ─────────────────────────────────────────────────────────
@@ -2686,6 +2732,12 @@ function allu_form_render_shortcode(): string
 
     $raw_page = isset($_GET['page']) ? sanitize_text_field(wp_unslash($_GET['page'])) : 'form';
     $page = in_array($raw_page, ['form', 'admin'], true) ? $raw_page : 'form';
+
+    if ($page === 'admin' && allu_form_is_wp_runtime()) {
+        if (!current_user_can('manage_options')) {
+            wp_die('Unauthorized');
+        }
+    }
     $raw_action = isset($_GET['action']) ? sanitize_text_field(wp_unslash($_GET['action'])) : null;
     $allowed_actions = ['save_submission', 'save_product', 'delete_product', 'email_pdf', 'download_pdf', 'download_support'];
     $action = ($raw_action !== null && in_array($raw_action, $allowed_actions, true)) ? $raw_action : null;
@@ -2721,13 +2773,23 @@ function allu_form_render_shortcode(): string
     }
 
     if ($action === 'download_pdf') {
-        allu_form_download_pdf(sanitize_text_field(wp_unslash($_GET['id'] ?? '')));
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'allu_form_download')) {
+            wp_die('Security check failed.');
+        }
+        $dlId = sanitize_text_field(wp_unslash($_GET['id'] ?? ''));
+        allu_form_require_download_access($dlId);
+        allu_form_download_pdf($dlId);
         exit;
     }
 
     if ($action === 'download_support') {
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'allu_form_download')) {
+            wp_die('Security check failed.');
+        }
+        $dlSubId = sanitize_text_field(wp_unslash($_GET['submission_id'] ?? ''));
+        allu_form_require_download_access($dlSubId);
         allu_form_download_support_document(
-            sanitize_text_field(wp_unslash($_GET['submission_id'] ?? '')),
+            $dlSubId,
             sanitize_text_field(wp_unslash($_GET['file'] ?? ''))
         );
         exit;
@@ -2800,10 +2862,10 @@ function allu_form_render_shortcode(): string
             <td><?= htmlspecialchars($s['id']) ?></td>
             <td><?= htmlspecialchars($s['doctor']['name']) ?></td>
             <td><?= htmlspecialchars(date('Y-m-d H:i', strtotime($s['submitted_at']))) ?></td>
-            <td><a href="?action=download_pdf&id=<?= urlencode($s['id']) ?>">Download PDF</a></td>
+            <td><a href="<?= esc_url(wp_nonce_url('?action=download_pdf&id=' . urlencode($s['id']), 'allu_form_download')) ?>">Download PDF</a></td>
             <td>
               <?php if (!empty($s['form']['peer_support_file'])): ?>
-                <a href="?action=download_support&submission_id=<?= urlencode($s['id']) ?>&file=<?= urlencode($s['form']['peer_support_file']) ?>">Download</a>
+                <a href="<?= esc_url(wp_nonce_url('?action=download_support&submission_id=' . urlencode($s['id']) . '&file=' . urlencode($s['form']['peer_support_file']), 'allu_form_download')) ?>">Download</a>
               <?php else: ?>—<?php endif; ?>
             </td>
             <td>
@@ -2825,7 +2887,7 @@ function allu_form_render_shortcode(): string
         <h2>Thank you! Your application has been submitted.</h2>
         <p>Your PDF has been generated in the exact Medsafe format and is ready for download.</p>
         <div class="thank-actions">
-          <a class="btn-link" href="?action=download_pdf&id=<?= urlencode($submissionView['id']) ?>">Download PDF</a>
+          <a class="btn-link" href="<?= esc_url(wp_nonce_url('?action=download_pdf&id=' . urlencode($submissionView['id']), 'allu_form_download')) ?>">Download PDF</a>
           <a class="btn-link ghost" href="?page=form">Create another submission</a>
         </div>
       </section>
