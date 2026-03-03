@@ -963,9 +963,9 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
         return [false, null, 'Clinical Experience & Training must be under 10,000 characters.', null];
     }
     $textFields = ['sourcing_notes', 'supporting_evidence_notes', 'treatment_protocol_notes', 'scientific_peer_review_notes', 'admin_monitoring_notes'];
-    foreach ($textFields as $tf) {
-        if (strlen((string)($post[$tf] ?? '')) > 10000) {
-            return [false, null, ucfirst(str_replace('_', ' ', $tf)) . ' must be under 10,000 characters.', null];
+    foreach ($textFields as $fieldName) {
+        if (strlen((string)($post[$fieldName] ?? '')) > 10000) {
+            return [false, null, ucfirst(str_replace('_', ' ', $fieldName)) . ' must be under 10,000 characters.', null];
         }
     }
     if (trim((string)($post['application_date'] ?? '')) === '') {
@@ -2862,10 +2862,10 @@ function allu_form_render_shortcode(): string
             <td><?= htmlspecialchars($s['id']) ?></td>
             <td><?= htmlspecialchars($s['doctor']['name']) ?></td>
             <td><?= htmlspecialchars(date('Y-m-d H:i', strtotime($s['submitted_at']))) ?></td>
-            <td><a href="<?= esc_url(wp_nonce_url('?action=download_pdf&id=' . urlencode($s['id']), 'allu_form_download')) ?>">Download PDF</a></td>
+            <td><a href="<?= esc_url(wp_nonce_url(add_query_arg(['action' => 'download_pdf', 'id' => $s['id']]), 'allu_form_download')) ?>">Download PDF</a></td>
             <td>
               <?php if (!empty($s['form']['peer_support_file'])): ?>
-                <a href="<?= esc_url(wp_nonce_url('?action=download_support&submission_id=' . urlencode($s['id']) . '&file=' . urlencode($s['form']['peer_support_file']), 'allu_form_download')) ?>">Download</a>
+                <a href="<?= esc_url(wp_nonce_url(add_query_arg(['action' => 'download_support', 'submission_id' => $s['id'], 'file' => $s['form']['peer_support_file']]), 'allu_form_download')) ?>">Download</a>
               <?php else: ?>—<?php endif; ?>
             </td>
             <td>
@@ -2887,7 +2887,7 @@ function allu_form_render_shortcode(): string
         <h2>Thank you! Your application has been submitted.</h2>
         <p>Your PDF has been generated in the exact Medsafe format and is ready for download.</p>
         <div class="thank-actions">
-          <a class="btn-link" href="<?= esc_url(wp_nonce_url('?action=download_pdf&id=' . urlencode($submissionView['id']), 'allu_form_download')) ?>">Download PDF</a>
+          <a class="btn-link" href="<?= esc_url(wp_nonce_url(add_query_arg(['action' => 'download_pdf', 'id' => $submissionView['id']]), 'allu_form_download')) ?>">Download PDF</a>
           <a class="btn-link ghost" href="?page=form">Create another submission</a>
         </div>
       </section>
