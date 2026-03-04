@@ -6,8 +6,7 @@
  */
 
 if (!defined('ABSPATH')) {
-    // Standalone fallback: try to locate and load WordPress.
-    allu_form_bootstrap_wp_runtime();
+    exit; // Direct access denied – this file must be loaded by WordPress.
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -287,12 +286,8 @@ function allu_form_get_data_dir(): string
 {
     static $dir = null;
     if ($dir === null) {
-        if (allu_form_is_wp_runtime()) {
-            $upload_dir = wp_upload_dir();
-            $dir = $upload_dir['basedir'] . '/allu-form';
-        } else {
-            $dir = __DIR__ . '/data';
-        }
+        $upload_dir = wp_upload_dir();
+        $dir = $upload_dir['basedir'] . '/allu-form';
     }
     return $dir;
 }
@@ -314,37 +309,11 @@ function allu_form_get_pdf_template_file(): string
 
 // ── Core Functions ────────────────────────────────────────────────────────────
 
-function allu_form_bootstrap_wp_runtime(): void
-{
-    if (function_exists('wp_get_current_user')) {
-        return;
-    }
-
-    $candidates = [];
-    $docRoot = rtrim((string)($_SERVER['DOCUMENT_ROOT'] ?? ''), '/');
-    if ($docRoot !== '') {
-        $candidates[] = $docRoot . '/wp-load.php';
-    }
-
-    $dir = __DIR__;
-    for ($i = 0; $i < 5; $i++) {
-        $candidates[] = $dir . '/wp-load.php';
-        $dir = dirname($dir);
-    }
-
-    foreach (array_unique($candidates) as $path) {
-        if ($path && file_exists($path)) {
-            @include_once $path;
-            if (function_exists('wp_get_current_user')) {
-                return;
-            }
-        }
-    }
-}
+// Standalone bootstrap removed – WordPress is always required.
 
 function allu_form_is_wp_runtime(): bool
 {
-    return function_exists('wp_get_current_user');
+    return true; // WordPress is always required; standalone mode removed.
 }
 
 function allu_form_get_doctor_profile(): array
@@ -592,7 +561,13 @@ function allu_form_ensure_pdf_template(): void
 
     $pdf = @file_get_contents(PDF_TEMPLATE_URL);
     if ($pdf && str_starts_with($pdf, '%PDF')) {
-        file_put_contents(allu_form_get_pdf_template_file(), $pdf);
+        // Write to a unique temp file then rename to avoid partial/corrupt writes.
+        $tmpFile = tempnam(allu_form_get_data_dir(), 'pdf_');
+        if ($tmpFile !== false && file_put_contents($tmpFile, $pdf) !== false) {
+            rename($tmpFile, allu_form_get_pdf_template_file());
+        } elseif ($tmpFile !== false && file_exists($tmpFile)) {
+            @unlink($tmpFile);
+        }
     }
 }
 
@@ -943,9 +918,20 @@ function allu_form_build_selected_product_details(array $selectedProductIds): ar
 
 function allu_form_save_submission(array $doctor, array $post, array $files): array
 {
+    // Rate limiting: max 10 submissions per user per hour.
+    $userId = (int)($doctor['id'] ?? 0);
+    $rateKey = 'allu_form_rate_' . $userId;
+    $rateCount = (int)get_transient($rateKey);
+    if ($rateCount >= 10) {
+        return [false, null, 'Rate limit exceeded. Please wait before submitting again.', null];
+    }
+
     $selectedProducts = array_values(array_filter($post['products'] ?? []));
     if (empty($selectedProducts)) {
         return [false, null, 'Please select at least one product.', null];
+    }
+    if (count($selectedProducts) > 20) {
+        return [false, null, 'You may select at most 20 products.', null];
     }
 
     $vocationalToggle = trim($post['vocational_scope_toggle'] ?? 'no');
@@ -956,24 +942,40 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
     if ($vocationalToggle === 'yes' && $vocationalScope === '') {
         return [false, null, 'Please specify your vocational scope(s).', null];
     }
+    if (mb_strlen($vocationalScope, 'UTF-8') > 5000) {
+        return [false, null, 'Vocational scope must be under 5,000 characters.', null];
+    }
     if (trim((string)($post['clinical_experience'] ?? '')) === '') {
         return [false, null, 'Clinical Experience & Training is required.', null];
     }
-    if (strlen((string)($post['clinical_experience'] ?? '')) > 10000) {
+    if (mb_strlen((string)($post['clinical_experience'] ?? ''), 'UTF-8') > 10000) {
         return [false, null, 'Clinical Experience & Training must be under 10,000 characters.', null];
     }
     $textFields = ['sourcing_notes', 'supporting_evidence_notes', 'treatment_protocol_notes', 'scientific_peer_review_notes', 'admin_monitoring_notes'];
     foreach ($textFields as $fieldName) {
-        if (strlen((string)($post[$fieldName] ?? '')) > 10000) {
+        if (mb_strlen((string)($post[$fieldName] ?? ''), 'UTF-8') > 10000) {
             return [false, null, ucfirst(str_replace('_', ' ', $fieldName)) . ' must be under 10,000 characters.', null];
         }
     }
-    if (trim((string)($post['application_date'] ?? '')) === '') {
+    $applicationDate = trim((string)($post['application_date'] ?? ''));
+    if ($applicationDate === '') {
         return [false, null, 'Application date is required.', null];
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $applicationDate) || !checkdate((int)substr($applicationDate, 5, 2), (int)substr($applicationDate, 8, 2), (int)substr($applicationDate, 0, 4))) {
+        return [false, null, 'Application date must be a valid date in YYYY-MM-DD format.', null];
+    }
+    if ($applicationDate > date('Y-m-d')) {
+        return [false, null, 'Application date cannot be in the future.', null];
     }
 
     $signatureDrawn = trim($post['signature_drawn'] ?? '');
     $signatureMode = $post['signature_mode'] ?? '';
+    if (!in_array($signatureMode, ['draw', 'upload'], true)) {
+        return [false, null, 'Invalid signature mode.', null];
+    }
+    if ($signatureMode === 'draw' && strlen($signatureDrawn) > 2 * 1024 * 1024) {
+        return [false, null, 'Drawn signature data is too large (max 2 MB).', null];
+    }
     $signatureUploadPath = null;
 
     if ($signatureMode === 'upload' && !empty($files['signature_upload']['name'])) {
@@ -996,7 +998,7 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
             return [false, null, 'Signature image must be smaller than 2 MB.', null];
         }
 
-        $sigName = uniqid('sig_') . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $files['signature_upload']['name']);
+        $sigName = 'sig_' . bin2hex(random_bytes(16)) . '.' . $ext;
         $target = allu_form_get_submissions_dir() . '/' . $sigName;
         move_uploaded_file($files['signature_upload']['tmp_name'], $target);
         $signatureUploadPath = $sigName;
@@ -1017,6 +1019,20 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
     }
     if (!is_array($productIndicationOthers)) {
         $productIndicationOthers = [];
+    }
+
+    // Sanitize and limit per-product indication values
+    foreach ($productIndications as $k => $v) {
+        $productIndications[$k] = sanitize_text_field((string)$v);
+        if (mb_strlen($productIndications[$k], 'UTF-8') > 500) {
+            return [false, null, 'Indication value is too long (max 500 characters).', null];
+        }
+    }
+    foreach ($productIndicationOthers as $k => $v) {
+        $productIndicationOthers[$k] = sanitize_text_field((string)$v);
+        if (mb_strlen($productIndicationOthers[$k], 'UTF-8') > 500) {
+            return [false, null, 'Custom indication is too long (max 500 characters).', null];
+        }
     }
 
     $selectedDetails = allu_form_build_selected_product_details($selectedProducts);
@@ -1139,6 +1155,10 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
             $wpdb->query('COMMIT');
         } catch (\Exception $e) {
             $wpdb->query('ROLLBACK');
+            // Clean up generated PDF on transaction failure.
+            if (file_exists($pdfPath)) {
+                @unlink($pdfPath);
+            }
             throw $e;
         }
     } else {
@@ -1194,9 +1214,16 @@ function allu_form_save_submission(array $doctor, array $post, array $files): ar
             $db->commit();
         } catch (\Exception $e) {
             $db->rollBack();
+            // Clean up generated PDF on transaction failure.
+            if (file_exists($pdfPath)) {
+                @unlink($pdfPath);
+            }
             throw $e;
         }
     }
+
+    // Increment rate limit counter on successful submission.
+    set_transient($rateKey, $rateCount + 1, HOUR_IN_SECONDS);
 
     return [true, 'Submission saved and PDF generated successfully.', null, $id];
 }
@@ -2187,7 +2214,21 @@ function allu_form_write_multi_page_pdf(string $path, array $streams, string $si
     }
 
     $pdf = allu_form_build_pdf_from_objects($objects, 1);
-    return file_put_contents($path, $pdf) !== false;
+
+    // Write to unique temp file then rename to avoid partial/corrupt PDF files.
+    $tmpFile = tempnam(dirname($path), 'pdf_');
+    if ($tmpFile === false) {
+        return false;
+    }
+    if (file_put_contents($tmpFile, $pdf) === false) {
+        @unlink($tmpFile);
+        return false;
+    }
+    if (!rename($tmpFile, $path)) {
+        @unlink($tmpFile);
+        return false;
+    }
+    return true;
 }
 
 function allu_form_build_signature_jpeg_from_data_url(string $dataUrl): ?array
@@ -2359,8 +2400,25 @@ function allu_form_pdf_rect_command(float $x, float $y, float $w, float $h, bool
 
 function allu_form_pdf_escape(string $text): string
 {
-    // Convert UTF-8 bullet (U+2022) to WinAnsiEncoding bullet (0x95)
-    $text = str_replace("\xE2\x80\xA2", "\x95", $text);
+    // Map common Unicode characters to their WinAnsiEncoding equivalents.
+    $unicodeMap = [
+        "\xE2\x80\xA2" => "\x95", // U+2022 BULLET → 0x95
+        "\xE2\x80\x93" => "\x96", // U+2013 EN DASH → 0x96
+        "\xE2\x80\x94" => "\x97", // U+2014 EM DASH → 0x97
+        "\xE2\x80\x98" => "\x91", // U+2018 LEFT SINGLE QUOTATION → 0x91
+        "\xE2\x80\x99" => "\x92", // U+2019 RIGHT SINGLE QUOTATION → 0x92
+        "\xE2\x80\x9C" => "\x93", // U+201C LEFT DOUBLE QUOTATION → 0x93
+        "\xE2\x80\x9D" => "\x94", // U+201D RIGHT DOUBLE QUOTATION → 0x94
+        "\xE2\x80\xA6" => '...',  // U+2026 HORIZONTAL ELLIPSIS → ...
+        "\xC2\xA0"     => ' ',    // U+00A0 NO-BREAK SPACE → space
+    ];
+    $text = strtr($text, $unicodeMap);
+
+    // Strip any remaining multi-byte characters outside WinAnsiEncoding
+    // to prevent broken glyph output. Keep printable Latin-1 range (0x20-0xFF)
+    // plus tab (0x09) and newline (0x0A) which are collapsed by whitespace normalization.
+    $text = preg_replace('/[^\x09\x0A\x20-\xFF]/u', '?', $text) ?? $text;
+
     $text = preg_replace('/\s+/', ' ', trim($text)) ?? '';
     return str_replace(['\\', '(', ')'], ['\\\\', '\(', '\)'], $text);
 }
@@ -2724,6 +2782,11 @@ function allu_form_email_pdf_to_doctor(string $submissionId): array
 
 function allu_form_render_shortcode(): string
 {
+    // Require authentication – this form handles sensitive medical data.
+    if (!is_user_logged_in()) {
+        return '<div class="alert error">You must be logged in to access this form.</div>';
+    }
+
     if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
         session_start();
     }
@@ -2733,13 +2796,13 @@ function allu_form_render_shortcode(): string
     $raw_page = isset($_GET['page']) ? sanitize_text_field(wp_unslash($_GET['page'])) : 'form';
     $page = in_array($raw_page, ['form', 'admin'], true) ? $raw_page : 'form';
 
-    if ($page === 'admin' && allu_form_is_wp_runtime()) {
+    if ($page === 'admin') {
         if (!current_user_can('manage_options')) {
             wp_die('Unauthorized');
         }
     }
     $raw_action = isset($_GET['action']) ? sanitize_text_field(wp_unslash($_GET['action'])) : null;
-    $allowed_actions = ['save_submission', 'save_product', 'delete_product', 'email_pdf', 'download_pdf', 'download_support'];
+    $allowed_actions = ['save_submission', 'email_pdf', 'download_pdf', 'download_support'];
     $action = ($raw_action !== null && in_array($raw_action, $allowed_actions, true)) ? $raw_action : null;
     $message = null;
     $error = null;
@@ -2758,15 +2821,13 @@ function allu_form_render_shortcode(): string
                 }
             }
 
-            if ($action === 'save_product' && allu_form_is_admin_page() && !allu_form_is_wp_runtime()) {
-                [$ok, $message, $error] = allu_form_save_product($_POST);
-            }
-
-            if ($action === 'delete_product' && allu_form_is_admin_page() && !allu_form_is_wp_runtime()) {
-                [$ok, $message, $error] = allu_form_delete_product(sanitize_text_field(wp_unslash($_POST['product_id'] ?? '')));
-            }
+            // Standalone product management removed – products are managed via WooCommerce.
 
             if ($action === 'email_pdf' && allu_form_is_admin_page()) {
+                // Defense-in-depth: also validated by the admin page gate above.
+                if (!current_user_can('manage_options')) {
+                    wp_die('Unauthorized');
+                }
                 [$ok, $message, $error] = allu_form_email_pdf_to_doctor(sanitize_text_field(wp_unslash($_POST['submission_id'] ?? '')));
             }
         }
@@ -2808,7 +2869,7 @@ function allu_form_render_shortcode(): string
 
     ob_start();
     ?>
-<div class="container">
+<div class="allu-form">
   <header class="topbar">
     <h1>Allu Prescription Form</h1>
   </header>
@@ -2821,36 +2882,11 @@ function allu_form_render_shortcode(): string
   <?php if ($error): ?><div class="alert error"><?= htmlspecialchars($error) ?></div><?php endif; ?>
 
   <?php if ($page === 'admin'): ?>
-    <?php if (allu_form_is_wp_runtime()): ?>
       <section class="card">
         <h2>WooCommerce Configuration</h2>
         <p>Products are loaded from WooCommerce. Edit each product under <strong>WooCommerce → Products</strong> and fill prescription custom fields (component, strength, form, sourced from, indications, and the indication mapping textareas).</p>
         <p>Doctor CPN is managed under <strong>Users → Profile</strong> via the new CPN field.</p>
       </section>
-    <?php else: ?>
-      <section class="card">
-        <h2>Product Management</h2>
-        <form method="post" action="?page=admin&action=save_product" class="grid">
-          <?php wp_nonce_field('allu_form_submission', 'allu_form_nonce'); ?>
-          <input name="name" placeholder="Product Name" required />
-          <input name="component" placeholder="Component" required />
-          <input name="strength" placeholder="Strength" required />
-          <input name="form" placeholder="Form" required />
-          <input name="source" placeholder="Source" required />
-          <input name="indications" placeholder="Indications (comma separated)" />
-          <label>Supporting Evidence Mapping (one per line: Indication | text)
-            <textarea name="supporting_evidence_map" rows="4" placeholder="Depression | Evidence summary"></textarea>
-          </label>
-          <label>Treatment Protocol Mapping (one per line: Indication | text)
-            <textarea name="treatment_protocol_map" rows="4" placeholder="Depression | Protocol summary"></textarea>
-          </label>
-          <label>Scientific Peer Review Mapping (one per line: Indication | text)
-            <textarea name="scientific_peer_review_map" rows="4" placeholder="Depression | Peer review summary"></textarea>
-          </label>
-          <button type="submit">Add Product</button>
-        </form>
-      </section>
-    <?php endif; ?>
 
     <section class="card">
       <h2>Submitted PDFs</h2>
@@ -2902,13 +2938,9 @@ function allu_form_render_shortcode(): string
         <div class="disclaimer">
           <p>This digital interface is provided by Allu Therapeutics as a specialised tool to facilitate the compilation and generation of a formal application to Medsafe under Regulation 22 of the Misuse of Drugs Regulations 1977. Use of this platform does not constitute medical or regulatory advice. The Prescribing Doctor, as the Applicant, remains the primary Health Agency under the Health Information Privacy Code 2020 and bears sole legal and clinical responsibility for the accuracy of the protocol, the selection of patients, and the provision of unapproved controlled drugs. Allu Therapeutics acts as a secure data processor; all private clinical data is encrypted and held in strict confidence, accessible only to the authorised prescriber to support their professional obligations and mandatory safety reporting to the Ministry of Health. By utilising this facilitation tool, the prescriber acknowledges that Medsafe’s Ministerial approval is subject to their own clinical expertise, independent scientific peer review, and adherence to the applicable professional standards.</p>
         </div>
-        <p style="font-size:12px;color:var(--muted);margin:6px 0 12px;">
+        <p style="font-size:12px;color:var(--af-muted);margin:6px 0 12px;">
           These details are fetched from your profile.
-          <?php if (allu_form_is_wp_runtime()): ?>
-            <a href="<?= esc_url(get_edit_profile_url()) ?>" target="_blank" style="color:var(--primary);">Edit your profile</a>
-          <?php else: ?>
-            <a href="#" style="color:var(--primary);">Edit your profile</a>
-          <?php endif; ?>
+            <a href="<?= esc_url(get_edit_profile_url()) ?>" target="_blank" style="color:var(--af-primary);">Edit your profile</a>
         </p>
         <div class="grid two">
           <label>Title<input value="<?= htmlspecialchars($doctor['title']) ?>" readonly /></label>
