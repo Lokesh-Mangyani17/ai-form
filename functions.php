@@ -209,6 +209,48 @@ function allu_form_render_prescription_product_fields(): void
     ]);
 
     woocommerce_wp_text_input([
+        'id' => '_prescription_active',
+        'label' => __('Active', 'allu-form'),
+        'description' => __('Product active status or value.', 'allu-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_text_input([
+        'id' => '_prescription_derived_from',
+        'label' => __('Derived From', 'allu-form'),
+        'description' => __('Product derived from value.', 'allu-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_text_input([
+        'id' => '_prescription_species',
+        'label' => __('Species', 'allu-form'),
+        'description' => __('Product species value.', 'allu-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_text_input([
+        'id' => '_prescription_origin',
+        'label' => __('Origin', 'allu-form'),
+        'description' => __('Product origin value.', 'allu-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_text_input([
+        'id' => '_prescription_units_in_box',
+        'label' => __('Units in Box', 'allu-form'),
+        'description' => __('Number or text for units in each box.', 'allu-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_text_input([
+        'id' => '_prescription_classification',
+        'label' => __('Classification', 'allu-form'),
+        'description' => __('Product classification value.', 'allu-form'),
+        'desc_tip' => true,
+    ]);
+
+    woocommerce_wp_text_input([
         'id' => '_prescription_indications',
         'label' => __('Indication(s)', 'allu-form'),
         'description' => __('Comma-separated indications for the indication dropdown.', 'allu-form'),
@@ -253,6 +295,12 @@ function allu_form_save_prescription_product_fields(int $product_id): void
         '_prescription_strength',
         '_prescription_form',
         '_prescription_source',
+        '_prescription_active',
+        '_prescription_derived_from',
+        '_prescription_species',
+        '_prescription_origin',
+        '_prescription_units_in_box',
+        '_prescription_classification',
         '_prescription_indications',
         '_prescription_supporting_evidence_map',
         '_prescription_treatment_protocol_map',
@@ -279,6 +327,11 @@ function allu_form_enqueue_styles(): void
 }
 
 add_shortcode('allu_prescription_form', 'allu_form_render_shortcode');
+add_shortcode('allu_product_details', 'allu_form_render_product_details_shortcode');
+
+if (class_exists('WooCommerce')) {
+    add_action('woocommerce_single_product_summary', 'allu_form_output_product_details_on_product_page', 25);
+}
 
 // ── Path Helpers ──────────────────────────────────────────────────────────────
 
@@ -2779,6 +2832,70 @@ function allu_form_email_pdf_to_doctor(string $submissionId): array
 }
 
 // ── Shortcode Handler ─────────────────────────────────────────────────────────
+
+
+function allu_form_get_product_detail_fields(int $productId): array
+{
+    $fieldMap = [
+        '_prescription_active' => __('Active', 'allu-form'),
+        '_prescription_derived_from' => __('Derived From', 'allu-form'),
+        '_prescription_species' => __('Species', 'allu-form'),
+        '_prescription_origin' => __('Origin', 'allu-form'),
+        '_prescription_units_in_box' => __('Units in Box', 'allu-form'),
+        '_prescription_classification' => __('Classification', 'allu-form'),
+    ];
+
+    $details = [];
+    foreach ($fieldMap as $metaKey => $label) {
+        $value = trim((string) get_post_meta($productId, $metaKey, true));
+        if ($value !== '') {
+            $details[] = [
+                'label' => $label,
+                'value' => $value,
+            ];
+        }
+    }
+
+    return $details;
+}
+
+function allu_form_render_product_details_shortcode(array $atts = []): string
+{
+    $atts = shortcode_atts([
+        'product_id' => 0,
+    ], $atts, 'allu_product_details');
+
+    $productId = (int) $atts['product_id'];
+    if ($productId <= 0 && function_exists('is_product') && is_product()) {
+        $productId = (int) get_the_ID();
+    }
+
+    if ($productId <= 0) {
+        return '';
+    }
+
+    $details = allu_form_get_product_detail_fields($productId);
+    if (empty($details)) {
+        return '';
+    }
+
+    $html = '<div class="allu-product-details"><ul>';
+    foreach ($details as $detail) {
+        $html .= '<li><strong>' . esc_html((string) $detail['label']) . ':</strong> ' . esc_html((string) $detail['value']) . '</li>';
+    }
+    $html .= '</ul></div>';
+
+    return $html;
+}
+
+function allu_form_output_product_details_on_product_page(): void
+{
+    if (!function_exists('is_product') || !is_product()) {
+        return;
+    }
+
+    echo allu_form_render_product_details_shortcode(['product_id' => get_the_ID()]);
+}
 
 function allu_form_render_shortcode(): string
 {
